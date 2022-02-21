@@ -15,10 +15,10 @@ Add the extension to your `behat.yml`:
 ```yaml
 default:
   extensions:
-      PhpBuiltin\Server:
-        verbose: false
-        rootDir: /var/www/html
-        host: localhost
+    PhpBuiltin\Server:
+      verbose: false
+      rootDir: /var/www/html
+      host: localhost
 ```
 
 ### Config values
