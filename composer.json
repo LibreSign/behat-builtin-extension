@@ -1,0 +1,23 @@
+{
+    "name": "libresign/behat-builtin-extension",
+    "description": "Behat extension to run php built-in web server",
+    "type": "library",
+    "license": "AGPL-3.0+",
+    "authors": [
+        {
+            "name": "Vitor Mattos",
+            "email": "vitor@php.rio"
+        }
+    ],
+    "require-dev": {
+        "behat/behat": "^3.10",
+        "friendsofphp/php-cs-fixer": "^3.6",
+        "vimeo/psalm": "^4.21",
+        "phpunit/phpunit": "^9.5"
+    },
+    "autoload": {
+        "psr-4": {
+            "LibreSign\\BehatBuiltinExtension\\": "src/"
+        }
+    }
+}

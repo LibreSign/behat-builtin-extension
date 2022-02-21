@@ -1,0 +1,28 @@
+name: Behat
+on: pull_request
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        php-versions: ['7.4', '8.0' , '8.1']
+
+    name: php${{ matrix.php-versions }}
+
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@v2
+
+      - name: Set up php ${{ matrix.php-versions }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-versions }}
+
+      - name: Set up dependencies
+        run: composer install
+
+      - name: Run behat
+        run: vendor/bin/behat

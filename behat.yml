@@ -1,0 +1,3 @@
+default:
+  extensions:
+      LibreSign\BehatBuiltinExtension\ServiceContainer\CallExtension: ~
