@@ -1,4 +1,4 @@
-![Test Status](https://github.com/libresign/behat-builtin-extension/workflows/behat/badge.svg?branch=main)
+[![Behat](https://github.com/LibreSign/behat-builtin-extension/actions/workflows/behat.yml/badge.svg)](https://github.com/LibreSign/behat-builtin-extension/actions/workflows/behat.yml)
 
 # Extension to use built-in PHP server on Behat tests
 
