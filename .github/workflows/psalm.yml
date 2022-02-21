@@ -4,8 +4,13 @@ on: pull_request
 jobs:
   php-cs-fixer:
     runs-on: ubuntu-latest
+    strategy:
+      # do not stop on another job's failure
+      fail-fast: false
+      matrix:
+        php-versions: ['7.4', '8.0' , '8.1']
 
-    name: php-cs check php${{ matrix.php-versions }}
+    name: Psalm check
 
     steps:
       - name: Checkout

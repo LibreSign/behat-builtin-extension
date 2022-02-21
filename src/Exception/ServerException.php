@@ -21,7 +21,7 @@
  *
  */
 
-namespace LibreSign\BehatBuiltinExtension\Exception;
+namespace PhpBuiltin\Exception;
 
 class ServerException extends \RuntimeException
 {

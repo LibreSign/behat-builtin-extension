@@ -22,7 +22,7 @@
  */
 
 use Behat\Behat\Context\Context;
-use LibreSign\BehatBuiltinExtension\RunServerListener;
+use PhpBuiltin\RunServerListener;
 use PHPUnit\Framework\Assert;
 
 class FeatureContext implements Context

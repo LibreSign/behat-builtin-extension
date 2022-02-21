@@ -21,12 +21,12 @@
  *
  */
 
-namespace LibreSign\BehatBuiltinExtension;
+namespace PhpBuiltin;
 
 use Behat\Testwork\EventDispatcher\Event\AfterSuiteTested;
 use Behat\Testwork\EventDispatcher\Event\BeforeSuiteTeardown;
 use Behat\Testwork\EventDispatcher\Event\BeforeSuiteTested;
-use LibreSign\BehatBuiltinExtension\Exception\ServerException;
+use PhpBuiltin\Exception\ServerException;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 
 class RunServerListener implements EventSubscriberInterface

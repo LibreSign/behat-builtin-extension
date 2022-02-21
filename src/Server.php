@@ -21,7 +21,7 @@
  *
  */
 
-namespace LibreSign\BehatBuiltinExtension\ServiceContainer;
+namespace PhpBuiltin;
 
 use Behat\Testwork\ServiceContainer\Extension;
 use Behat\Testwork\ServiceContainer\ExtensionManager;
@@ -30,7 +30,7 @@ use Symfony\Component\Console\Input\ArgvInput;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\Definition;
 
-final class CallExtension implements Extension
+final class Server implements Extension
 {
     public const ID = 'php_builtin_server';
     /**
@@ -80,7 +80,7 @@ final class CallExtension implements Extension
         $verbose = $this->getVerboseLevel($container, $config);
         $rootDir = $this->getRootDir($config);
         $host = $this->getHost($config);
-        $definition = (new Definition('LibreSign\BehatBuiltinExtension\RunServerListener'))
+        $definition = (new Definition('PhpBuiltin\RunServerListener'))
             ->addTag('event_dispatcher.subscriber')
             ->setArguments([$verbose, $rootDir, $host])
         ;
