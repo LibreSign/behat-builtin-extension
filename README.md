@@ -15,7 +15,7 @@ Add the extension to your `behat.yml`:
 ```yaml
 default:
   extensions:
-      LibreSign\BehatBuiltinExtension\ServiceContainer\CallExtension:
+      PhpBuiltin\Server:
         verbose: false
         rootDir: /var/www/html
         host: localhost
