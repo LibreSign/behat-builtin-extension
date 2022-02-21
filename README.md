@@ -33,3 +33,6 @@ You can also use `-v` option to enable verbose mode. Example
 ```bash
 vendor/bin/behat -v
 ```
+The verbose mode will show:
+* The rootDir used
+* The output of PHP Built-in server
