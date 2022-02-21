@@ -79,6 +79,10 @@ final class Server implements Extension
     {
         $verbose = $this->getVerboseLevel($container, $config);
         $rootDir = $this->getRootDir($config);
+        if (is_numeric($verbose)) {
+            $output = $container->get('cli.output');
+            $output->writeln('<info>Root dir: ' . $rootDir . '</info>');
+        }
         $host = $this->getHost($config);
         $definition = (new Definition('PhpBuiltin\RunServerListener'))
             ->addTag('event_dispatcher.subscriber')
