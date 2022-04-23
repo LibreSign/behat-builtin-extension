@@ -6,6 +6,7 @@
 
 ```bash
 composer require libresign/behat-builtin-extension
+vendor/bin/behat --init
 ```
 
 ## Configuration
