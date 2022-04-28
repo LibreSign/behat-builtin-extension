@@ -3,6 +3,7 @@
     "description": "Behat extension to run php built-in web server",
     "type": "library",
     "license": "AGPL-3.0+",
+    "prefer-stable": true,
     "authors": [
         {
             "name": "Vitor Mattos",
