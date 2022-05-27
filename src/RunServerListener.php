@@ -31,8 +31,8 @@ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 
 class RunServerListener implements EventSubscriberInterface
 {
-    /** @var int */
-    private $pid = 0;
+    /** @var string */
+    private $pid = '0';
     /** @var string */
     private static $host;
     /** @var int */
@@ -97,7 +97,7 @@ class RunServerListener implements EventSubscriberInterface
             $verbose
         );
 
-        $this->pid = (int) exec($fullCmd);
+        $this->pid = (string)(int) exec($fullCmd);
 
         if (!ctype_digit($this->pid)) {
             throw new ServerException('Error starting server, received ' . $this->pid . ', expected int PID');
@@ -153,7 +153,7 @@ class RunServerListener implements EventSubscriberInterface
         }
         $this->killZombies();
 
-        $this->pid = 0;
+        $this->pid = '0';
     }
 
     public function killZombies(): void
