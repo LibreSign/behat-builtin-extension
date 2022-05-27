@@ -10,6 +10,9 @@
             "email": "vitor@php.rio"
         }
     ],
+    "require": {
+        "ext-sockets": "*"
+    },
     "require-dev": {
         "behat/behat": "^3.10",
         "friendsofphp/php-cs-fixer": "^3.6",
