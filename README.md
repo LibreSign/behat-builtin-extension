@@ -37,3 +37,45 @@ vendor/bin/behat -v
 The verbose mode will show:
 * The rootDir used
 * The output of PHP Built-in server
+
+## Usage example
+
+```php
+<?php
+
+use Behat\Behat\Context\Context;
+use PhpBuiltin\RunServerListener;
+
+/**
+ * Defines application features from the specific context.
+ */
+class FeatureContext implements Context
+{
+    private string $baseUrl;
+    public function __construct()
+    {
+        $this->baseUrl = RunServerListener::getServerRoot();
+    }
+
+    public function sendRequest(string $verb, string $url, ?array $body = null, array $headers = []): void
+    {
+        $client = new Client();
+
+        $fullUrl = $this->baseUrl . ltrim($url, '/');
+
+        $options['headers'] = $headers;
+
+        if (is_array($body)) {
+            $options['form_params'] = $body;
+        }
+
+        try {
+            $this->response = $client->{$verb}($fullUrl, $options);
+        } catch (ClientException $e) {
+            $this->response = $e->getResponse();
+        } catch (ServerException $e) {
+            $this->response = $e->getResponse();
+        }
+    }
+}
+```
