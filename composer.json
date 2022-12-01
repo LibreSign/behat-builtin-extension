@@ -16,7 +16,7 @@
     "require-dev": {
         "behat/behat": "^3.10",
         "friendsofphp/php-cs-fixer": "^3.6",
-        "vimeo/psalm": "^4.21",
+        "vimeo/psalm": "^4.21 || ^5.0",
         "phpunit/phpunit": "^9.5"
     },
     "scripts": {
