@@ -93,7 +93,7 @@ class RunServerListener implements EventSubscriberInterface
 
         $this->pid = (string)(int) exec($fullCmd);
 
-        if (!ctype_digit($this->pid)) {
+        if (!$this->pid) {
             throw new ServerException('Error starting server, received ' . $this->pid . ', expected int PID');
         }
 
