@@ -31,18 +31,12 @@ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 
 class RunServerListener implements EventSubscriberInterface
 {
-    /** @var string */
-    private $pid = '0';
-    /** @var string */
-    private static $host;
-    /** @var int */
-    private static $port = 0;
-    /** @var ?int */
-    private $verbose = null;
-    /** @var string */
-    private $rootDir;
-    /** @var self */
-    private static $instance;
+    private string $pid = '0';
+    private static string $host;
+    private static int $port = 0;
+    private ?int $verbose = null;
+    private string $rootDir;
+    private static self $instance;
 
     public function __construct(?int $verbose, string $rootDir, string $host)
     {
@@ -99,7 +93,7 @@ class RunServerListener implements EventSubscriberInterface
 
         $this->pid = (string)(int) exec($fullCmd);
 
-        if (!ctype_digit($this->pid)) {
+        if (!$this->pid) {
             throw new ServerException('Error starting server, received ' . $this->pid . ', expected int PID');
         }
 

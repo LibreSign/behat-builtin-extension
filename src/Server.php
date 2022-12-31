@@ -28,6 +28,7 @@ use Behat\Testwork\ServiceContainer\ExtensionManager;
 use Exception;
 use Symfony\Component\Config\Definition\Builder\ArrayNodeDefinition;
 use Symfony\Component\Console\Input\ArgvInput;
+use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\Definition;
 
@@ -82,7 +83,9 @@ final class Server implements Extension
         $rootDir = $this->getRootDir($config);
         if (is_numeric($verbose)) {
             $output = $container->get('cli.output');
-            $output->writeln('<info>Root dir: ' . $rootDir . '</info>');
+            if ($output instanceof OutputInterface) {
+                $output->writeln('<info>Root dir: ' . $rootDir . '</info>');
+            }
         }
         $host = $this->getHost($config);
         $definition = (new Definition('PhpBuiltin\RunServerListener'))
