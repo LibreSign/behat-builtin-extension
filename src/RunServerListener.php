@@ -39,10 +39,11 @@ class RunServerListener implements EventSubscriberInterface
     private string $runAs = '';
     private static self $instance;
 
-    public function __construct(?int $verbose, string $rootDir, string $host)
+    public function __construct(?int $verbose, string $rootDir, string $host, string $runAs)
     {
         $this->verbose = $verbose;
         $this->rootDir = $rootDir;
+        $this->runAs = $runAs;
         self::$host = $host;
         self::$instance = $this;
     }
