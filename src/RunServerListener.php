@@ -36,12 +36,14 @@ class RunServerListener implements EventSubscriberInterface
     private static int $port = 0;
     private ?int $verbose = null;
     private string $rootDir;
+    private string $runAs = '';
     private static self $instance;
 
-    public function __construct(?int $verbose, string $rootDir, string $host)
+    public function __construct(?int $verbose, string $rootDir, string $host, string $runAs)
     {
         $this->verbose = $verbose;
         $this->rootDir = $rootDir;
+        $this->runAs = $runAs;
         self::$host = $host;
         self::$instance = $this;
     }
@@ -78,6 +80,10 @@ class RunServerListener implements EventSubscriberInterface
         $script = escapeshellarg($this->rootDir);
 
         $cmd = 'php -S ' . self::$host .':' . self::$port . ' -t ' . $script;
+
+        if ($this->runAs) {
+            $cmd = 'runuser -u ' . $this->runAs . ' -- ' . $cmd;
+        }
 
         if (is_numeric($this->verbose)) {
             $verbose = '';
@@ -195,8 +201,10 @@ class RunServerListener implements EventSubscriberInterface
      * Let the OS find an open port for you.
      *
      * @return int
+     *
+     * @psalm-return int<1, max>
      */
-    private function findOpenPort()
+    private function findOpenPort(): int
     {
         $sock = socket_create(AF_INET, SOCK_STREAM, 0);
 
