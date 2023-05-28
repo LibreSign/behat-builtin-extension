@@ -72,6 +72,10 @@ final class Server implements Extension
                     ->info('Host domain or IP')
                     ->defaultValue('localhost')
                 ->end()
+                ->scalarNode('runAs')
+                    ->info('The username to be used to run the built-in server')
+                    ->defaultValue('')
+                ->end()
             ->end()
         ;
     }
@@ -88,9 +92,10 @@ final class Server implements Extension
             }
         }
         $host = $this->getHost($config);
+        $runAs = $this->getRunAs($config);
         $definition = (new Definition('PhpBuiltin\RunServerListener'))
             ->addTag('event_dispatcher.subscriber')
-            ->setArguments([$verbose, $rootDir, $host])
+            ->setArguments([$verbose, $rootDir, $host, $runAs])
         ;
 
         $container->setDefinition(self::ID . '.listener', $definition);
@@ -103,6 +108,15 @@ final class Server implements Extension
             $host = $config['host'];
         }
         return (string) $host;
+    }
+
+    private function getRunAs(array $config): string
+    {
+        $runAs = getenv('BEHAT_RUN_AS');
+        if ($runAs === false) {
+            $runAs = $config['runAs'];
+        }
+        return (string) $runAs;
     }
 
     private function getRootDir(array $config): string
