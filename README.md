@@ -24,11 +24,12 @@ default:
 
 ### Config values
 
-| config  | default       | Environment    | Description                   |
-| ------- | ------------- | -------------- | ----------------------------- |
-| verbose | false         | none           | Enables/disables verbose mode |
-| rootDir | /var/www/html | BEHAT_HOST     | Specifies http root dir       |
-| host    | localhost     | BEHAT_ROOT_DIR | Host domain or IP             |
+| config  | default       | Environment    | Description                                        |
+| ------- | ------------- | -------------- | -------------------------------------------------- |
+| verbose | false         | none           | Enables/disables verbose mode                      |
+| rootDir | /var/www/html | BEHAT_HOST     | Specifies http root dir                            |
+| host    | localhost     | BEHAT_ROOT_DIR | Host domain or IP                                  |
+| runAs   |               | BEHAT_RUN_AS   | The username to be used to run the built-in server |
 
 You can also use `-v` option to enable verbose mode. Example
 ```bash
