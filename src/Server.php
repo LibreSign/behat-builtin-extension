@@ -83,16 +83,19 @@ final class Server implements Extension
     /** @inheritDoc */
     public function load(ContainerBuilder $container, array $config): void
     {
-        $verbose = $this->getVerboseLevel($container, $config);
         $rootDir = $this->getRootDir($config);
+        $host = $this->getHost($config);
+        $runAs = $this->getRunAs($config);
+        $verbose = $this->getVerboseLevel($container, $config);
         if (is_numeric($verbose)) {
             $output = $container->get('cli.output');
             if ($output instanceof OutputInterface) {
                 $output->writeln('<info>Root dir: ' . $rootDir . '</info>');
+                $output->writeln('<info>Verbose: ' . $verbose . '</info>');
+                $output->writeln('<info>Host: ' . $host . '</info>');
+                $output->writeln('<info>RunAs: ' . $runAs . '</info>');
             }
         }
-        $host = $this->getHost($config);
-        $runAs = $this->getRunAs($config);
         $definition = (new Definition('PhpBuiltin\RunServerListener'))
             ->addTag('event_dispatcher.subscriber')
             ->setArguments([$verbose, $rootDir, $host, $runAs])
@@ -149,6 +152,10 @@ final class Server implements Extension
         if ($input->hasParameterOption('-v')) {
             $verbose = $input->getParameterOption('-v');
             return strlen($verbose);
+        }
+        $runAs = getenv('BEHAT_VERBOSE');
+        if (is_numeric($runAs)) {
+            return (int) $runAs;
         }
         return $config['verbose'] ? 0 : null;
     }

@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<files psalm-version="5.12.0@f90118cdeacd0088e7215e64c0c99ceca819e176">
-  <file src="src/Server.php">
-    <UndefinedInterfaceMethod>
-      <code>scalarNode</code>
-    </UndefinedInterfaceMethod>
+<files psalm-version="5.4.0@62db5d4f6a7ae0a20f7cc5a4952d730272fc0863">
+  <file src="src/RunServerListener.php">
+    <ForbiddenCode occurrences="1">
+      <code>shell_exec($cmd)</code>
+    </ForbiddenCode>
+    <PossiblyNullArgument occurrences="1">
+      <code>shell_exec($cmd)</code>
+    </PossiblyNullArgument>
   </file>
 </files>

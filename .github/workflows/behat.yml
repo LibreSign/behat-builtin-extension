@@ -20,9 +20,13 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php-versions }}
+          coverage: none
 
       - name: Set up dependencies
         run: composer install
 
       - name: Run behat
-        run: vendor/bin/behat
+        run: |
+          export BEHAT_RUN_AS=$(ls -ld behat.yml | awk '{print $3}')
+          export BEHAT_VERBOSE="$RUNNER_DEBUG"
+          vendor/bin/behat
