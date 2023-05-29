@@ -40,9 +40,9 @@ class FeatureContext implements Context
     public function serverIsUp(string $status)
     {
         if ($status === 'up') {
-            Assert::assertTrue($this->server->isRunning());
+            Assert::assertTrue($this->server->isRunning(), 'Server is up?');
         } else {
-            Assert::assertFalse($this->server->isRunning());
+            Assert::assertFalse($this->server->isRunning(), 'Server is down?');
         }
     }
 
@@ -60,7 +60,7 @@ class FeatureContext implements Context
     public function startServer()
     {
         $this->server->start();
-        Assert::assertTrue($this->server->isRunning());
+        Assert::assertTrue($this->server->isRunning(), 'Server is running after start?');
     }
 
     /**
@@ -69,7 +69,7 @@ class FeatureContext implements Context
     public function stopServer()
     {
         $this->server->stop();
-        Assert::assertFalse($this->server->isRunning());
+        Assert::assertFalse($this->server->isRunning(), 'Server is stopped after stop?');
     }
 
     /**
@@ -77,7 +77,7 @@ class FeatureContext implements Context
      */
     public function killAllInstances()
     {
-        $this->server->killZombies();
-        Assert::assertFalse($this->server->isRunning());
+        $this->server->stop();
+        Assert::assertFalse($this->server->isRunning(), 'Is server running after run kill?');
     }
 }

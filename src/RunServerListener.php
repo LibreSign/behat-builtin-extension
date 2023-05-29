@@ -91,11 +91,11 @@ class RunServerListener implements EventSubscriberInterface
             $verbose = '2>&1';
         }
 
-        $fullCmd = sprintf(
+        $fullCmd = $this->parseCommand(sprintf(
             '%s > /dev/null %s & echo $!',
             escapeshellcmd($cmd),
             $verbose
-        );
+        ));
 
         $this->pid = (string)(int) exec($fullCmd);
 
@@ -114,7 +114,10 @@ class RunServerListener implements EventSubscriberInterface
         }
 
         if (!$this->isRunning()) {
-            throw new ServerException('Failed to start server. Is something already running on port ' . self::$port . '?');
+            throw new ServerException(
+                'Failed to start server. Is something already running on port ' . self::$port . "?\n" .
+                'Full command: ' . $fullCmd
+            );
         }
 
         register_shutdown_function(function () {
@@ -146,11 +149,9 @@ class RunServerListener implements EventSubscriberInterface
     public function stop(): void
     {
         if ($this->pid) {
-            exec(sprintf(
-                'kill %d',
-                $this->pid
-            ));
+            exec($this->parseCommand('kill ' . $this->pid));
         }
+
         $this->killZombies();
 
         $this->pid = '0';
@@ -162,13 +163,29 @@ class RunServerListener implements EventSubscriberInterface
             'grep "php -S ' . self::$host . '"|' .
             'grep -v grep|' .
             'sed -e "s/^[[:space:]]*//"|cut -d" " -f1';
-        $pids = trim(exec($cmd));
+        $pids = trim(shell_exec($cmd));
         $pids = explode("\n", $pids);
         foreach ($pids as $pid) {
-            if ($pid) {
-                exec('kill ' . $pid);
+            if ($pid && (!$this->pid || $pid !== $this->pid)) {
+                exec($this->parseCommand('kill ' . $pid));
             }
         }
+    }
+
+    /**
+     * Parse command
+     *
+     * Have commands that need to be executed as sudo otherwise don't will work,
+     * by example the command runuser or kill. To prevent error when run in a
+     * GitHub Actions, these commands are executed prefixed by sudo when exists
+     * an environment called GITHUB_ACTIONS.
+     */
+    private function parseCommand(string $command): string
+    {
+        if (getenv('GITHUB_ACTIONS') !== false) {
+            $command = 'sudo ' . $command;
+        }
+        return $command;
     }
 
     /**
