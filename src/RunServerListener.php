@@ -148,6 +148,10 @@ class RunServerListener implements EventSubscriberInterface
      */
     public function stop(): void
     {
+        if ($this->pid) {
+            exec($this->parseCommand('kill ' . $this->pid));
+        }
+
         $this->killZombies();
 
         $this->pid = '0';
@@ -162,7 +166,7 @@ class RunServerListener implements EventSubscriberInterface
         $pids = trim(shell_exec($cmd));
         $pids = explode("\n", $pids);
         foreach ($pids as $pid) {
-            if ($pid) {
+            if ($pid && (!$this->pid || $pid !== $this->pid)) {
                 exec($this->parseCommand('kill ' . $pid));
             }
         }
