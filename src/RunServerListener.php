@@ -163,7 +163,11 @@ class RunServerListener implements EventSubscriberInterface
             'grep "php -S ' . self::$host . '"|' .
             'grep -v grep|' .
             'sed -e "s/^[[:space:]]*//"|cut -d" " -f1';
-        $pids = trim(shell_exec($cmd));
+        $output = shell_exec($cmd);
+        if (!is_string($output)) {
+            return;
+        }
+        $pids = trim($output);
         $pids = explode("\n", $pids);
         foreach ($pids as $pid) {
             if ($pid && (!$this->pid || $pid !== $this->pid)) {
