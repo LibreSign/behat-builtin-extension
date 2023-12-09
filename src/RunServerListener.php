@@ -37,13 +37,15 @@ class RunServerListener implements EventSubscriberInterface
     private ?int $verbose = null;
     private string $rootDir;
     private string $runAs = '';
+    private int $workers = 0;
     private static self $instance;
 
-    public function __construct(?int $verbose, string $rootDir, string $host, string $runAs)
+    public function __construct(?int $verbose, string $rootDir, string $host, string $runAs, int $workers)
     {
         $this->verbose = $verbose;
         $this->rootDir = $rootDir;
         $this->runAs = $runAs;
+        $this->workers = $workers;
         self::$host = $host;
         self::$instance = $this;
     }
@@ -80,6 +82,10 @@ class RunServerListener implements EventSubscriberInterface
         $script = escapeshellarg($this->rootDir);
 
         $cmd = 'php -S ' . self::$host .':' . self::$port . ' -t ' . $script;
+
+        if ($this->workers > 0) {
+            $cmd = 'PHP_CLI_SERVER_WORKERS=' . $this->workers . ' ' . $cmd;
+        }
 
         if ($this->runAs && get_current_user() !== $this->runAs) {
             $cmd = 'runuser -u ' . $this->runAs . ' -- ' . $cmd;
