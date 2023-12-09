@@ -76,6 +76,15 @@ final class Server implements Extension
                     ->info('The username to be used to run the built-in server')
                     ->defaultValue('')
                 ->end()
+                ->scalarNode('workers')
+                    ->info(
+                        'The quantity of workers to use. ' .
+                        'More informations here ' .
+                        'https://www.php.net/manual/en/features.commandline.webserver.php ' .
+                        'searching by PHP_CLI_SERVER_WORKERS'
+                    )
+                    ->defaultValue(0)
+                ->end()
             ->end()
         ;
     }
@@ -86,6 +95,7 @@ final class Server implements Extension
         $rootDir = $this->getRootDir($config);
         $host = $this->getHost($config);
         $runAs = $this->getRunAs($config);
+        $workers = $this->getWorkers($config);
         $verbose = $this->getVerboseLevel($container, $config);
         if (is_numeric($verbose)) {
             $output = $container->get('cli.output');
@@ -94,11 +104,12 @@ final class Server implements Extension
                 $output->writeln('<info>Verbose: ' . $verbose . '</info>');
                 $output->writeln('<info>Host: ' . $host . '</info>');
                 $output->writeln('<info>RunAs: ' . $runAs . '</info>');
+                $output->writeln('<info>Workers: ' . $workers . '</info>');
             }
         }
         $definition = (new Definition('PhpBuiltin\RunServerListener'))
             ->addTag('event_dispatcher.subscriber')
-            ->setArguments([$verbose, $rootDir, $host, $runAs])
+            ->setArguments([$verbose, $rootDir, $host, $runAs, $workers])
         ;
 
         $container->setDefinition(self::ID . '.listener', $definition);
@@ -120,6 +131,15 @@ final class Server implements Extension
             $runAs = $config['runAs'];
         }
         return (string) $runAs;
+    }
+
+    private function getWorkers(array $config): string
+    {
+        $workers = getenv('BEHAT_WORKERS');
+        if ($workers === false) {
+            $workers = $config['workers'];
+        }
+        return (string) $workers;
     }
 
     private function getRootDir(array $config): string
