@@ -83,12 +83,12 @@ class RunServerListener implements EventSubscriberInterface
 
         $cmd = 'php -S ' . self::$host .':' . self::$port . ' -t ' . $script;
 
-        if ($this->workers > 0) {
-            $cmd = 'PHP_CLI_SERVER_WORKERS=' . $this->workers . ' ' . $cmd;
-        }
-
         if ($this->runAs && get_current_user() !== $this->runAs) {
             $cmd = 'runuser -u ' . $this->runAs . ' -- ' . $cmd;
+        }
+
+        if ($this->workers > 0) {
+            $cmd = 'PHP_CLI_SERVER_WORKERS=' . $this->workers . ' ' . $cmd;
         }
 
         if (is_numeric($this->verbose)) {
