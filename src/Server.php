@@ -148,8 +148,8 @@ final class Server implements Extension
         if ($rootDir === false) {
             $rootDir = $config['rootDir'];
         }
-        $rootDir = realpath($rootDir);
-        if (!empty($rootDir) && !is_dir($rootDir)) {
+        $rootDir = (string) realpath($rootDir);
+        if (empty($rootDir) || !is_dir($rootDir)) {
             throw new Exception('Invalid root dir [' . $rootDir . '], define BEHAT_ROOT_DIR environment or rootDir config value with valid path');
         }
         return $rootDir;
