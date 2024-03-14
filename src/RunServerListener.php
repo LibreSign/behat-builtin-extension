@@ -193,6 +193,9 @@ class RunServerListener implements EventSubscriberInterface
     private function parseCommand(string $command): string
     {
         if (getenv('GITHUB_ACTIONS') !== false) {
+            if ($this->runAs) {
+                return 'sudo -u ' . $this->runAs . ' ' . $command;
+            }
             $command = 'sudo ' . $command;
         }
         return $command;
