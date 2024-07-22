@@ -27,8 +27,8 @@ default:
 | config  | default       | Environment    | Description                                                                                                                                                      |
 | ------- | ------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | verbose | false         | BEHAT_VERBOSE  | Enables/disables verbose mode                                                                                                                                    |
-| rootDir | /var/www/html | BEHAT_HOST     | Specifies http root dir                                                                                                                                          |
-| host    | localhost     | BEHAT_ROOT_DIR | Host domain or IP                                                                                                                                                |
+| rootDir | /var/www/html | BEHAT_ROOT_DIR | Specifies http root dir                                                                                                                                          |
+| host    | localhost     | BEHAT_HOST     | Host domain or IP                                                                                                                                                |
 | runAs   |               | BEHAT_RUN_AS   | The username to be used to run the built-in server                                                                                                               |
 | workers | 0             | BEHAT_WORKERS  | The quantity of workers to use. More informations [here](https://www.php.net/manual/en/features.commandline.webserver.php) searching by `PHP_CLI_SERVER_WORKERS` |
 
