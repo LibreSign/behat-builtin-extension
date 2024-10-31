@@ -84,6 +84,22 @@ class RunServerListener implements EventSubscriberInterface
         $cmd = 'php -S ' . self::$host .':' . self::$port . ' -t ' . $script;
 
         if ($this->runAs && get_current_user() !== $this->runAs) {
+            if (!$this->isSuperUser()) {
+                throw new ServerException(
+                    sprintf(
+                        <<<ERROR
+                        File: %s
+                        Owner: %s
+                        Need to be: %s
+                        Suggested command to fix: chown -R %s: .
+                        ERROR,
+                        __FILE__,
+                        get_current_user(),
+                        $this->runAs,
+                        $this->runAs
+                    )
+                );
+            }
             $cmd = 'runuser -u ' . $this->runAs . ' -- ' . $cmd;
         }
 
@@ -131,6 +147,20 @@ class RunServerListener implements EventSubscriberInterface
                 $this->stop();
             }
         });
+    }
+
+    private function isSuperUser(): bool
+    {
+        if (posix_getuid() === 0) {
+            return true;
+        }
+        $groups = posix_getgroups();
+        foreach ($groups as $group) {
+            if ($group == 'sudo' || $group == 'wheel') {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
