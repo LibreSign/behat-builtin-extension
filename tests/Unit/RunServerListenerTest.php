@@ -167,11 +167,21 @@ final class RunServerListenerTest extends TestCase
     private function sendSignal(int $pid, string $signal): void
     {
         $command = sprintf('kill -s %s %d', $signal, $pid);
-        if (getenv('GITHUB_ACTIONS') !== false) {
+        if ($this->isForeignProcess($pid)) {
             $command = 'sudo ' . $command;
         }
         exec($command, $output, $exitCode);
         $this->assertSame(0, $exitCode, sprintf('Failed to send SIG%s to pid %d', $signal, $pid));
+    }
+
+    private function isForeignProcess(int $pid): bool
+    {
+        exec(sprintf('ps -o uid= -p %d', $pid), $output, $exitCode);
+        if ($exitCode !== 0 || $output === []) {
+            return false;
+        }
+
+        return (int) trim($output[0]) !== posix_getuid();
     }
 
     /**

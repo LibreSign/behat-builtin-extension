@@ -74,8 +74,9 @@ final class RunServerListener implements EventSubscriberInterface
         $php = PHP_BINARY !== '' && is_file(PHP_BINARY) ? escapeshellarg(PHP_BINARY) : 'php';
 
         $cmd = $php . ' -S ' . self::$host . ':' . self::$port . ' -t ' . $script;
+        $switchUser = $this->shouldSwitchUser();
 
-        if ($this->runAs && get_current_user() !== $this->runAs) {
+        if ($switchUser) {
             if (!$this->isSuperUser()) {
                 throw new ServerException(
                     sprintf(
@@ -92,7 +93,11 @@ final class RunServerListener implements EventSubscriberInterface
                     )
                 );
             }
-            $cmd = 'runuser -u ' . $this->runAs . ' -- ' . $cmd;
+            // Already root: switch with runuser. Otherwise wrap the final start command with sudo -u.
+            if (posix_getuid() === 0) {
+                $cmd = 'runuser -u ' . $this->runAs . ' -- ' . $cmd;
+                $switchUser = false;
+            }
         }
 
         if ($this->workers > 0) {
@@ -115,22 +120,20 @@ final class RunServerListener implements EventSubscriberInterface
                 $serverExitFile,
                 $serverWrapperFile
             );
-            // Do not wrap this start with sudo: on GitHub Actions, `sudo nohup sh /tmp/...`
-            // fails silently (outer stdout/stderr discarded) and never writes pid/log/exit.
-            // Privileged start is only required when runAs is configured.
             $fullCmd = sprintf(
                 'nohup sh %s >>%s 2>&1 & echo $!',
                 escapeshellarg($serverWrapperFile),
                 escapeshellarg($serverLogFile)
             );
-            if ($this->runAs !== '') {
-                $fullCmd = $this->parseCommand($fullCmd);
-            }
         } else {
-            $fullCmd = $this->parseCommand(sprintf(
+            $fullCmd = sprintf(
                 '%s > /dev/null 2>&1 & echo $!',
                 escapeshellcmd($cmd)
-            ));
+            );
+        }
+
+        if ($switchUser) {
+            $fullCmd = $this->withPrivilege($fullCmd);
         }
 
         $wrapperPid = (string)(int) exec($fullCmd);
@@ -244,7 +247,7 @@ final class RunServerListener implements EventSubscriberInterface
             if ($this->isVerbose()) {
                 $this->writeDiagnostic(sprintf('Stopping PHP built-in server pid=%s', $this->pid));
             }
-            exec($this->parseCommand('kill ' . $this->pid));
+            $this->killPid($this->pid);
             $this->waitForProcessExit(40);
             $this->waitForExitFile(40);
         }
@@ -275,29 +278,55 @@ final class RunServerListener implements EventSubscriberInterface
         foreach ($pids as $pid) {
             if ($pid && (!$this->pid || $pid !== $this->pid)) {
                 if ($this->isProcessAlive($pid)) {
-                    exec($this->parseCommand('kill ' . $pid));
+                    $this->killPid($pid);
                 }
             }
         }
     }
 
-    /**
-     * Parse command
-     *
-     * Have commands that need to be executed as sudo otherwise don't will work,
-     * by example the command runuser or kill. To prevent error when run in a
-     * GitHub Actions, these commands are executed prefixed by sudo when exists
-     * an environment called GITHUB_ACTIONS.
-     */
-    private function parseCommand(string $command): string
+    private function shouldSwitchUser(): bool
     {
-        if (getenv('GITHUB_ACTIONS') !== false) {
-            if ($this->runAs) {
-                return 'sudo -u ' . $this->runAs . ' ' . $command;
-            }
+        return $this->runAs !== '' && get_current_user() !== $this->runAs;
+    }
+
+    /**
+     * Prefix a command with sudo only when privilege is required to switch user.
+     * GITHUB_ACTIONS alone never implies sudo.
+     */
+    private function withPrivilege(string $command): string
+    {
+        if ($this->runAs !== '') {
+            return 'sudo -u ' . $this->runAs . ' ' . $command;
+        }
+
+        return 'sudo ' . $command;
+    }
+
+    /**
+     * Signal a process, using sudo only when it is owned by another user.
+     */
+    private function killPid(string $pid): void
+    {
+        $command = 'kill ' . $pid;
+        if ($this->isProcessOwnedByOtherUser($pid)) {
             $command = 'sudo ' . $command;
         }
-        return $command;
+        exec($command);
+    }
+
+    private function isProcessOwnedByOtherUser(string $pid): bool
+    {
+        if ($pid === '' || $pid === '0' || !ctype_digit($pid)) {
+            return false;
+        }
+
+        $output = [];
+        exec(sprintf('ps -o uid= -p %s', $pid), $output, $exitCode);
+        if ($exitCode !== 0 || !isset($output[0])) {
+            return false;
+        }
+
+        return (int) trim((string) $output[0]) !== posix_getuid();
     }
 
     /**
