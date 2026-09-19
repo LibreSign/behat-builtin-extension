@@ -39,6 +39,11 @@ class RunServerListener implements EventSubscriberInterface
     private string $runAs = '';
     private int $workers = 0;
     private static self $instance;
+    private ?string $serverLogFile = null;
+    private ?string $serverExitFile = null;
+    private ?string $serverPidFile = null;
+    /** @var list<string> */
+    private array $diagnosticMessages = [];
 
     public function __construct(?int $verbose, string $rootDir, string $host, string $runAs, int $workers)
     {
@@ -107,19 +112,32 @@ class RunServerListener implements EventSubscriberInterface
             $cmd = 'PHP_CLI_SERVER_WORKERS=' . $this->workers . ' ' . $cmd;
         }
 
-        if (is_numeric($this->verbose)) {
-            $verbose = '';
+        if ($this->isVerbose()) {
+            $this->prepareDiagnosticFiles();
+            $fullCmd = $this->parseCommand(sprintf(
+                'nohup sh -c %s >/dev/null 2>&1 & echo $!',
+                escapeshellarg(sprintf(
+                    '%s > %s 2>&1 & echo $! > %s; wait $(cat %s); echo $? > %s',
+                    $cmd,
+                    $this->serverLogFile,
+                    $this->serverPidFile,
+                    $this->serverPidFile,
+                    $this->serverExitFile
+                ))
+            ));
         } else {
-            $verbose = '2>&1';
+            $fullCmd = $this->parseCommand(sprintf(
+                '%s > /dev/null 2>&1 & echo $!',
+                escapeshellcmd($cmd)
+            ));
         }
 
-        $fullCmd = $this->parseCommand(sprintf(
-            '%s > /dev/null %s & echo $!',
-            escapeshellcmd($cmd),
-            $verbose
-        ));
-
-        $this->pid = (string)(int) exec($fullCmd);
+        $wrapperPid = (string)(int) exec($fullCmd);
+        if ($this->isVerbose()) {
+            $this->pid = $this->readPhpServerPid($wrapperPid);
+        } else {
+            $this->pid = $wrapperPid;
+        }
 
         if (!$this->pid) {
             throw new ServerException('Error starting server, received ' . $this->pid . ', expected int PID');
@@ -136,10 +154,25 @@ class RunServerListener implements EventSubscriberInterface
         }
 
         if (!$this->isRunning()) {
+            if ($this->isVerbose()) {
+                $this->reportExitStatus();
+                $this->flushServerOutput();
+            }
             throw new ServerException(
                 'Failed to start server. Is something already running on port ' . self::$port . "?\n" .
                 'Full command: ' . $fullCmd
             );
+        }
+
+        if ($this->isVerbose()) {
+            $this->writeDiagnostic(sprintf(
+                'Started PHP built-in server pid=%s host=%s port=%d workers=%d log=%s',
+                $this->pid,
+                self::$host,
+                self::$port,
+                $this->workers,
+                $this->serverLogFile ?? '(none)'
+            ));
         }
 
         register_shutdown_function(function () {
@@ -184,13 +217,39 @@ class RunServerListener implements EventSubscriberInterface
      */
     public function stop(): void
     {
-        if ($this->pid) {
+        $trackedPid = $this->pid;
+
+        if ($this->isVerbose() && $trackedPid && $trackedPid !== '0' && !$this->isRunning()) {
+            $this->writeDiagnostic(sprintf(
+                'Teardown: server process already gone (pid was %s).',
+                $trackedPid
+            ));
+            $this->reportExitStatus();
+            $this->flushServerOutput();
+            $this->killZombies();
+            $this->pid = '0';
+            $this->cleanupDiagnosticFiles();
+            return;
+        }
+
+        if ($this->pid && $this->isRunning()) {
+            if ($this->isVerbose()) {
+                $this->writeDiagnostic(sprintf('Stopping PHP built-in server pid=%s', $this->pid));
+            }
             exec($this->parseCommand('kill ' . $this->pid));
+            $this->waitForProcessExit(40);
+            $this->waitForExitFile(40);
+        }
+
+        if ($this->isVerbose()) {
+            $this->reportExitStatus();
+            $this->flushServerOutput();
         }
 
         $this->killZombies();
 
         $this->pid = '0';
+        $this->cleanupDiagnosticFiles();
     }
 
     public function killZombies(): void
@@ -207,7 +266,9 @@ class RunServerListener implements EventSubscriberInterface
         $pids = explode("\n", $pids);
         foreach ($pids as $pid) {
             if ($pid && (!$this->pid || $pid !== $this->pid)) {
-                exec($this->parseCommand('kill ' . $pid));
+                if ($this->isProcessAlive($pid)) {
+                    exec($this->parseCommand('kill ' . $pid));
+                }
             }
         }
     }
@@ -258,6 +319,24 @@ class RunServerListener implements EventSubscriberInterface
     }
 
     /**
+     * @return list<string>
+     */
+    public function getDiagnosticMessages(): array
+    {
+        return $this->diagnosticMessages;
+    }
+
+    public function getServerLogFile(): ?string
+    {
+        return $this->serverLogFile;
+    }
+
+    public function isVerbose(): bool
+    {
+        return is_numeric($this->verbose);
+    }
+
+    /**
      * Let the OS find an open port for you.
      *
      * @return int
@@ -286,5 +365,121 @@ class RunServerListener implements EventSubscriberInterface
     public function afterSuite(AfterSuiteTested $event): void
     {
         $this->stop();
+    }
+
+    private function prepareDiagnosticFiles(): void
+    {
+        $this->cleanupDiagnosticFiles();
+        $base = tempnam(sys_get_temp_dir(), 'behat-php-server-');
+        if ($base === false) {
+            throw new ServerException('Unable to create temporary log file for PHP built-in server');
+        }
+        $this->serverLogFile = $base . '.log';
+        $this->serverExitFile = $base . '.exit';
+        $this->serverPidFile = $base . '.pid';
+        @unlink($base);
+        touch($this->serverLogFile);
+    }
+
+    private function cleanupDiagnosticFiles(): void
+    {
+        foreach ([$this->serverLogFile, $this->serverExitFile, $this->serverPidFile] as $file) {
+            if (is_string($file) && is_file($file)) {
+                @unlink($file);
+            }
+        }
+        $this->serverLogFile = null;
+        $this->serverExitFile = null;
+        $this->serverPidFile = null;
+    }
+
+    private function readPhpServerPid(string $wrapperPid): string
+    {
+        for ($i = 0; $i < 50; $i++) {
+            if (is_string($this->serverPidFile) && is_file($this->serverPidFile)) {
+                $pid = trim((string)file_get_contents($this->serverPidFile));
+                if ($pid !== '' && ctype_digit($pid)) {
+                    return $pid;
+                }
+            }
+            usleep(50000);
+        }
+
+        return $wrapperPid;
+    }
+
+    private function waitForProcessExit(int $attempts): void
+    {
+        for ($i = 0; $i < $attempts; $i++) {
+            if (!$this->isRunning()) {
+                return;
+            }
+            usleep(50000);
+        }
+    }
+
+    private function waitForExitFile(int $attempts): void
+    {
+        if (!is_string($this->serverExitFile)) {
+            return;
+        }
+        for ($i = 0; $i < $attempts; $i++) {
+            if (is_file($this->serverExitFile) && trim((string)file_get_contents($this->serverExitFile)) !== '') {
+                return;
+            }
+            usleep(50000);
+        }
+    }
+
+    private function isProcessAlive(string $pid): bool
+    {
+        if ($pid === '' || $pid === '0') {
+            return false;
+        }
+        exec(sprintf('ps %d', $pid), $result);
+        return count($result) > 1;
+    }
+
+    private function reportExitStatus(): void
+    {
+        if (!is_string($this->serverExitFile) || !is_file($this->serverExitFile)) {
+            if (!$this->isRunning()) {
+                $this->writeDiagnostic('Server exit status unavailable (process ended before status could be captured).');
+            }
+            return;
+        }
+
+        $status = trim((string)file_get_contents($this->serverExitFile));
+        if ($status === '') {
+            $this->writeDiagnostic('Server exit status file was empty.');
+            return;
+        }
+
+        $this->writeDiagnostic(sprintf('Server process exit status: %s', $status));
+    }
+
+    private function flushServerOutput(): void
+    {
+        if (!is_string($this->serverLogFile) || !is_file($this->serverLogFile)) {
+            $this->writeDiagnostic('Server stdout/stderr log unavailable.');
+            return;
+        }
+
+        $output = (string)file_get_contents($this->serverLogFile);
+        if ($output === '') {
+            $this->writeDiagnostic('Server stdout/stderr: (empty)');
+            return;
+        }
+
+        $this->writeDiagnostic("Server stdout/stderr:\n" . rtrim($output));
+    }
+
+    private function writeDiagnostic(string $message): void
+    {
+        $this->diagnosticMessages[] = $message;
+        if (!$this->isVerbose()) {
+            return;
+        }
+        fwrite(STDERR, '[php-builtin-server] ' . $message . "\n");
     }
 }

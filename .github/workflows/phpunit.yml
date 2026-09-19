@@ -1,0 +1,30 @@
+name: PHPUnit
+on: pull_request
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        php-versions: ['8.1', '8.2', '8.3']
+
+    name: php${{ matrix.php-versions }}
+
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@v4
+
+      - name: Set up php ${{ matrix.php-versions }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-versions }}
+          extensions: sockets
+          coverage: none
+
+      - name: Set up dependencies
+        run: composer install
+
+      - name: Run unit tests
+        run: composer test:unit

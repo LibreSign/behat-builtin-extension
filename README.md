@@ -37,8 +37,11 @@ You can also use `-v` option to enable verbose mode. Example
 vendor/bin/behat -v
 ```
 The verbose mode will show:
-* The rootDir used
-* The output of PHP Built-in server
+* The rootDir, host, runAs and workers used
+* When the PHP built-in server starts: PID, host, port, worker count and log path
+* PHP built-in server stdout/stderr captured for the suite
+* Process exit status when the server terminates
+* A clear message when teardown finds that the server process is already gone (instead of only `kill: No such process`)
 
 ## Usage example
 
