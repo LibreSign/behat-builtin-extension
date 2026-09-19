@@ -45,7 +45,43 @@ final class RunServerListenerTest extends TestCase
         $this->assertNotNull($listener->getServerLogFile());
         $this->assertFileExists((string)$listener->getServerLogFile());
 
+        $port = $listener->getPort();
+        $pid = $this->extractPidFromDiagnostics($listener->getDiagnosticMessages());
+        $workerPids = $this->waitForChildProcesses($pid, 1);
+
         $listener->stop();
+
+        $this->assertFalse($listener->isRunning());
+        $this->assertFalse($this->isPidAlive($pid), 'Main server PID should be gone after stop()');
+        foreach ($workerPids as $workerPid) {
+            $this->assertFalse(
+                $this->isPidAlive($workerPid),
+                sprintf('Worker PID %d should be gone after stop()', $workerPid)
+            );
+        }
+        $this->assertTrue(
+            $this->canBindPort('127.0.0.1', $port),
+            sprintf('Port %d should be free after stop() with workers=2', $port)
+        );
+    }
+
+    public function testStopWithWorkersAllowsRestartOnSamePort(): void
+    {
+        $listener = new RunServerListener(0, $this->docRoot, '127.0.0.1', '', 2);
+        $listener->start();
+        $port = $listener->getPort();
+        $this->assertTrue($listener->isRunning());
+        $listener->stop();
+        $this->assertFalse($listener->isRunning());
+        $this->assertTrue($this->canBindPort('127.0.0.1', $port));
+
+        $restarted = new RunServerListener(0, $this->docRoot, '127.0.0.1', '', 2);
+        $restarted->start();
+        $this->assertSame($port, $restarted->getPort());
+        $this->assertTrue($restarted->isRunning());
+        $restarted->stop();
+        $this->assertFalse($restarted->isRunning());
+        $this->assertTrue($this->canBindPort('127.0.0.1', $port));
     }
 
     public function testVerboseStopReportsExitStatusAndOutput(): void
@@ -162,6 +198,68 @@ final class RunServerListenerTest extends TestCase
 
         $this->assertSame([], $listener->getDiagnosticMessages());
         $this->assertFalse($listener->isRunning());
+    }
+
+    private function waitForChildProcesses(int $parentPid, int $minimumCount): array
+    {
+        for ($i = 0; $i < 40; $i++) {
+            $children = $this->childPids($parentPid);
+            if (count($children) >= $minimumCount) {
+                return $children;
+            }
+            usleep(50000);
+        }
+
+        $this->fail(sprintf(
+            'Expected at least %d child worker process(es) for pid %d',
+            $minimumCount,
+            $parentPid
+        ));
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function childPids(int $parentPid): array
+    {
+        $output = [];
+        exec(sprintf('pgrep -P %d', $parentPid), $output, $exitCode);
+        if ($exitCode !== 0) {
+            return [];
+        }
+
+        $pids = [];
+        foreach ($output as $line) {
+            $pid = (int) trim($line);
+            if ($pid > 0) {
+                $pids[] = $pid;
+            }
+        }
+
+        return $pids;
+    }
+
+    private function isPidAlive(int $pid): bool
+    {
+        if ($pid <= 0) {
+            return false;
+        }
+        exec(sprintf('ps %d', $pid), $result);
+
+        return count($result) > 1;
+    }
+
+    private function canBindPort(string $host, int $port): bool
+    {
+        $sock = @socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
+        if ($sock === false) {
+            return false;
+        }
+        socket_set_option($sock, SOL_SOCKET, SO_REUSEADDR, 1);
+        $bound = @socket_bind($sock, $host, $port);
+        socket_close($sock);
+
+        return $bound === true;
     }
 
     private function sendSignal(int $pid, string $signal): void

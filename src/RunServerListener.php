@@ -27,6 +27,7 @@ final class RunServerListener implements EventSubscriberInterface
     private ?string $serverExitFile = null;
     private ?string $serverPidFile = null;
     private ?string $serverWrapperFile = null;
+    private string $processGroupId = '0';
     /** @var list<string> */
     private array $diagnosticMessages = [];
 
@@ -101,7 +102,7 @@ final class RunServerListener implements EventSubscriberInterface
         }
 
         if ($this->workers > 0) {
-            $cmd = 'PHP_CLI_SERVER_WORKERS=' . $this->workers . ' ' . $cmd;
+            $cmd = 'env PHP_CLI_SERVER_WORKERS=' . $this->workers . ' ' . $cmd;
         }
 
         if ($this->isVerbose()) {
@@ -128,7 +129,7 @@ final class RunServerListener implements EventSubscriberInterface
         } else {
             $fullCmd = sprintf(
                 '%s > /dev/null 2>&1 & echo $!',
-                escapeshellcmd($cmd)
+                $this->wrapInNewSession(escapeshellcmd($cmd))
             );
         }
 
@@ -146,6 +147,8 @@ final class RunServerListener implements EventSubscriberInterface
         if (!$this->pid) {
             throw new ServerException('Error starting server, received ' . $this->pid . ', expected int PID');
         }
+
+        $this->processGroupId = $this->resolveProcessGroupId($this->pid);
 
         for ($i = 0; $i <= 20; $i++) {
             usleep(100000);
@@ -234,21 +237,21 @@ final class RunServerListener implements EventSubscriberInterface
                 'Teardown: server process already gone (pid was %s).',
                 $trackedPid
             ));
+            $this->terminateServerTree($trackedPid);
             $this->waitForExitFile(40);
             $this->reportExitStatus();
             $this->flushServerOutput();
-            $this->killZombies();
             $this->pid = '0';
+            $this->processGroupId = '0';
             $this->cleanupDiagnosticFiles();
             return;
         }
 
-        if ($this->pid && $this->isRunning()) {
-            if ($this->isVerbose()) {
+        if ($this->pid !== '0') {
+            if ($this->isVerbose() && $this->isRunning()) {
                 $this->writeDiagnostic(sprintf('Stopping PHP built-in server pid=%s', $this->pid));
             }
-            $this->killPid($this->pid);
-            $this->waitForProcessExit(40);
+            $this->terminateServerTree($this->pid);
             $this->waitForExitFile(40);
         }
 
@@ -257,30 +260,31 @@ final class RunServerListener implements EventSubscriberInterface
             $this->flushServerOutput();
         }
 
-        $this->killZombies();
-
         $this->pid = '0';
+        $this->processGroupId = '0';
         $this->cleanupDiagnosticFiles();
     }
 
+    /**
+     * Terminate leftover server processes for the configured host/port.
+     * Prefer process-group / descendant cleanup over matching executable names.
+     */
     public function killZombies(): void
     {
-        $cmd = 'ps -eo pid,command|' .
-            'grep "php -S ' . self::$host . '"|' .
-            'grep -v grep|' .
-            'sed -e "s/^[[:space:]]*//"|cut -d" " -f1';
-        $output = shell_exec($cmd);
-        if (!is_string($output)) {
+        if ($this->pid !== '0') {
+            $this->terminateServerTree($this->pid);
             return;
         }
-        $pids = trim($output);
-        $pids = explode("\n", $pids);
-        foreach ($pids as $pid) {
-            if ($pid && (!$this->pid || $pid !== $this->pid)) {
-                if ($this->isProcessAlive($pid)) {
-                    $this->killPid($pid);
-                }
-            }
+
+        if ($this->processGroupId !== '0') {
+            $this->signalProcessGroup($this->processGroupId, 'TERM');
+            $this->signalProcessGroup($this->processGroupId, 'KILL');
+            $this->processGroupId = '0';
+        }
+
+        foreach ($this->findListenerPids(self::$port) as $pid) {
+            $this->signalProcess($pid, 'TERM');
+            $this->signalProcess($pid, 'KILL');
         }
     }
 
@@ -303,15 +307,209 @@ final class RunServerListener implements EventSubscriberInterface
     }
 
     /**
-     * Signal a process, using sudo only when it is owned by another user.
+     * Start the PHP server in a new session when possible so workers share a
+     * dedicated process group that stop() can terminate as a unit.
      */
-    private function killPid(string $pid): void
+    private function wrapInNewSession(string $command): string
     {
-        $command = 'kill ' . $pid;
+        if ($this->canCreateNewSession()) {
+            return 'setsid ' . $command;
+        }
+
+        return $command;
+    }
+
+    private function canCreateNewSession(): bool
+    {
+        exec('command -v setsid', $output, $exitCode);
+
+        return $exitCode === 0;
+    }
+
+    private function resolveProcessGroupId(string $pid): string
+    {
+        if ($pid === '' || $pid === '0' || !ctype_digit($pid)) {
+            return '0';
+        }
+
+        $output = [];
+        exec(sprintf('ps -o pgid= -p %s', $pid), $output, $exitCode);
+        if ($exitCode !== 0 || !isset($output[0])) {
+            return $pid;
+        }
+
+        $pgid = trim((string) $output[0]);
+
+        return ctype_digit($pgid) ? $pgid : $pid;
+    }
+
+    /**
+     * Stop the tracked server PID, its process group, and any remaining children.
+     */
+    private function terminateServerTree(string $pid): void
+    {
+        if ($pid === '' || $pid === '0') {
+            return;
+        }
+
+        $pgid = $this->processGroupId !== '0' ? $this->processGroupId : $this->resolveProcessGroupId($pid);
+        $descendants = $this->collectDescendantPids($pid);
+
+        if ($pgid !== '0') {
+            $this->signalProcessGroup($pgid, 'TERM');
+        }
+        $this->signalProcess($pid, 'TERM');
+        foreach ($descendants as $childPid) {
+            $this->signalProcess($childPid, 'TERM');
+        }
+
+        $this->waitForTreeExit($pid, $descendants, 40);
+
+        if ($pgid !== '0') {
+            $this->signalProcessGroup($pgid, 'KILL');
+        }
+        foreach (array_merge([$pid], $descendants) as $targetPid) {
+            if ($this->isProcessAlive($targetPid)) {
+                $this->signalProcess($targetPid, 'KILL');
+            }
+        }
+
+        foreach ($this->findListenerPids(self::$port) as $listenerPid) {
+            $this->signalProcess($listenerPid, 'KILL');
+        }
+
+        $this->waitForPortRelease(40);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function collectDescendantPids(string $rootPid): array
+    {
+        if ($rootPid === '' || $rootPid === '0' || !ctype_digit($rootPid)) {
+            return [];
+        }
+
+        $found = [];
+        $queue = [$rootPid];
+        while ($queue !== []) {
+            $parent = array_shift($queue);
+            $output = [];
+            exec(sprintf('pgrep -P %s', $parent), $output, $exitCode);
+            if ($exitCode !== 0) {
+                continue;
+            }
+            foreach ($output as $line) {
+                $child = trim($line);
+                if ($child === '' || !ctype_digit($child) || isset($found[$child])) {
+                    continue;
+                }
+                $found[$child] = true;
+                $queue[] = $child;
+            }
+        }
+
+        return array_keys($found);
+    }
+
+    /**
+     * @param list<string> $descendants
+     */
+    private function waitForTreeExit(string $rootPid, array $descendants, int $attempts): void
+    {
+        for ($i = 0; $i < $attempts; $i++) {
+            $alive = $this->isProcessAlive($rootPid);
+            if (!$alive) {
+                foreach ($descendants as $childPid) {
+                    if ($this->isProcessAlive($childPid)) {
+                        $alive = true;
+                        break;
+                    }
+                }
+            }
+            if (!$alive) {
+                return;
+            }
+            usleep(50000);
+        }
+    }
+
+    private function waitForPortRelease(int $attempts): void
+    {
+        for ($i = 0; $i < $attempts; $i++) {
+            if (!$this->isServerPortInUse()) {
+                return;
+            }
+            usleep(50000);
+        }
+    }
+
+    private function isServerPortInUse(): bool
+    {
+        if (self::$port <= 0) {
+            return false;
+        }
+
+        $connection = @fsockopen(self::$host, self::$port, $errno, $errstr, 0.05);
+        if (is_resource($connection)) {
+            fclose($connection);
+
+            return true;
+        }
+
+        return $this->findListenerPids(self::$port) !== [];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function findListenerPids(int $port): array
+    {
+        if ($port <= 0) {
+            return [];
+        }
+
+        $output = [];
+        exec(sprintf('lsof -nP -iTCP:%d -sTCP:LISTEN -t 2>/dev/null', $port), $output, $exitCode);
+        if ($exitCode !== 0) {
+            return [];
+        }
+
+        $pids = [];
+        foreach ($output as $line) {
+            $pid = trim($line);
+            if ($pid !== '' && ctype_digit($pid)) {
+                $pids[] = $pid;
+            }
+        }
+
+        return array_values(array_unique($pids));
+    }
+
+    private function signalProcessGroup(string $pgid, string $signal): void
+    {
+        if ($pgid === '' || $pgid === '0' || !ctype_digit($pgid)) {
+            return;
+        }
+
+        $command = sprintf('kill -s %s -- -%s', $signal, $pgid);
+        if ($this->isProcessOwnedByOtherUser($pgid)) {
+            $command = 'sudo ' . $command;
+        }
+        exec($command . ' 2>/dev/null');
+    }
+
+    private function signalProcess(string $pid, string $signal): void
+    {
+        if ($pid === '' || $pid === '0' || !ctype_digit($pid)) {
+            return;
+        }
+
+        $command = sprintf('kill -s %s %s', $signal, $pid);
         if ($this->isProcessOwnedByOtherUser($pid)) {
             $command = 'sudo ' . $command;
         }
-        exec($command);
+        exec($command . ' 2>/dev/null');
     }
 
     private function isProcessOwnedByOtherUser(string $pid): bool
@@ -459,7 +657,7 @@ final class RunServerListener implements EventSubscriberInterface
             "wait \$(cat %s)\n" .
             "echo \$? > %s\n",
             escapeshellarg($serverLogFile),
-            $cmd,
+            $this->wrapInNewSession($cmd),
             escapeshellarg($serverLogFile),
             escapeshellarg($serverPidFile),
             escapeshellarg($serverPidFile),
@@ -485,16 +683,6 @@ final class RunServerListener implements EventSubscriberInterface
         }
 
         return $wrapperPid;
-    }
-
-    private function waitForProcessExit(int $attempts): void
-    {
-        for ($i = 0; $i < $attempts; $i++) {
-            if (!$this->isRunning()) {
-                return;
-            }
-            usleep(50000);
-        }
     }
 
     private function waitForExitFile(int $attempts): void
