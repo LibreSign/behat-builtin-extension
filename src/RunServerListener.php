@@ -454,7 +454,7 @@ class RunServerListener implements EventSubscriberInterface
             return (string)$code;
         }
 
-        return sprintf('%d (%s)', $code, $signalName);
+        return sprintf('%d (possibly %s)', $code, $signalName);
     }
 
     private function signalNameFromWaitStatus(int $code): ?string
