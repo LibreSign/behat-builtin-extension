@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: 2026 LibreCode coop and contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+version = 1
+SPDX-PackageName = "behat-builtin-extension"
+SPDX-PackageSupplier = "LibreCode <contact@librecode.coop>"
+SPDX-PackageDownloadLocation = "https://github.com/LibreSign/behat-builtin-extension/"
+
+[[annotations]]
+path = [".github/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2022 LibreCode coop and contributors"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = [
+    ".gitignore",
+    ".php-cs-fixer.dist.php",
+    "LICENSE",
+    "README.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    "behat.yml",
+    "composer.json",
+    "phpunit.xml",
+    "psalm.xml",
+    "tests/psalm-baseline.xml",
+    "features/**/*.feature",
+    "vendor-bin/**/composer.json",
+    "vendor-bin/**/composer.lock"
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2022-2026 LibreCode coop and contributors"
+SPDX-License-Identifier = "AGPL-3.0-or-later"
