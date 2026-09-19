@@ -91,6 +91,7 @@ final class RunServerListenerTest extends TestCase
             sprintf('Server process exit status: %d (%s)', $expectedStatus, $expectedLabel),
             $messages
         );
+        $this->assertStringContainsString('Server stdout/stderr:', $messages);
         $this->assertFalse($listener->isRunning());
     }
 
@@ -123,6 +124,8 @@ final class RunServerListenerTest extends TestCase
             sprintf('Teardown: server process already gone (pid was %s).', $pid),
             $messages
         );
+        $this->assertStringContainsString('Server process exit status: 143 (SIGTERM)', $messages);
+        $this->assertStringContainsString('Server stdout/stderr:', $messages);
         $this->assertStringNotContainsString('No such process', $messages);
         $this->assertFalse($listener->isRunning());
     }

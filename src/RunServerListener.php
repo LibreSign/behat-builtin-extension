@@ -159,7 +159,7 @@ class RunServerListener implements EventSubscriberInterface
         }
 
         register_shutdown_function(function () {
-            if ($this->isRunning()) {
+            if ($this->pid !== '0') {
                 $this->stop();
             }
         });
