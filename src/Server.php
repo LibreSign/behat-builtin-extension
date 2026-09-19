@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2022 Vitor Mattos <vitor@php.rio>
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -23,11 +24,13 @@ final class Server implements Extension
      *
      * @return string
      */
+    #[\Override]
     public function getConfigKey(): string
     {
         return self::ID;
     }
 
+    #[\Override]
     public function initialize(ExtensionManager $extensionManager): void
     {
     }
@@ -39,6 +42,7 @@ final class Server implements Extension
      * @psalm-suppress PossiblyUndefinedMethod
      * @psalm-suppress PossiblyNullReference
      */
+    #[\Override]
     public function configure(ArrayNodeDefinition $builder): void
     {
         $builder
@@ -73,6 +77,7 @@ final class Server implements Extension
     }
 
     /** @inheritDoc */
+    #[\Override]
     public function load(ContainerBuilder $container, array $config): void
     {
         $rootDir = $this->getRootDir($config);
@@ -163,6 +168,7 @@ final class Server implements Extension
         return $config['verbose'] ? 0 : null;
     }
 
+    #[\Override]
     public function process(ContainerBuilder $container): void
     {
     }

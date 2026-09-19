@@ -130,6 +130,29 @@ final class RunServerListenerTest extends TestCase
         $this->assertFalse($listener->isRunning());
     }
 
+    public function testVerboseStartFailureIncludesServerOutput(): void
+    {
+        $invalidRoot = $this->docRoot . '/not-a-directory.php';
+        file_put_contents($invalidRoot, "<?php echo 'nope';\n");
+
+        $listener = new RunServerListener(0, $invalidRoot, '127.0.0.1', '', 0);
+
+        try {
+            $listener->start();
+            $this->fail('Expected server start to fail for an invalid document root.');
+        } catch (\PhpBuiltin\Exception\ServerException $exception) {
+            $messages = $exception->getMessage() . "\n" . implode("\n", $listener->getDiagnosticMessages());
+            $this->assertStringContainsString('Failed to start server', $messages);
+            $this->assertTrue(
+                str_contains($messages, 'Server stdout/stderr:')
+                || str_contains($messages, 'Server stdout/stderr log unreadable:')
+                || str_contains($messages, 'Server process exit status:'),
+                'Startup failure should preserve PHP built-in server output or exit status. Got: ' . $messages
+            );
+            $this->assertFalse($listener->isRunning());
+        }
+    }
+
     public function testNonVerboseStopDoesNotEmitDiagnostics(): void
     {
         $listener = new RunServerListener(null, $this->docRoot, '127.0.0.1', '', 0);

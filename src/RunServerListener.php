@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2022 Vitor Mattos <vitor@php.rio>
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -12,7 +13,7 @@ use Behat\Testwork\EventDispatcher\Event\BeforeSuiteTested;
 use PhpBuiltin\Exception\ServerException;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 
-class RunServerListener implements EventSubscriberInterface
+final class RunServerListener implements EventSubscriberInterface
 {
     private string $pid = '0';
     private static string $host;
@@ -25,6 +26,7 @@ class RunServerListener implements EventSubscriberInterface
     private ?string $serverLogFile = null;
     private ?string $serverExitFile = null;
     private ?string $serverPidFile = null;
+    private ?string $serverWrapperFile = null;
     /** @var list<string> */
     private array $diagnosticMessages = [];
 
@@ -43,6 +45,7 @@ class RunServerListener implements EventSubscriberInterface
         return self::$instance;
     }
 
+    #[\Override]
     public static function getSubscribedEvents()
     {
         return array(
@@ -68,8 +71,9 @@ class RunServerListener implements EventSubscriberInterface
         }
 
         $script = escapeshellarg($this->rootDir);
+        $php = PHP_BINARY !== '' && is_file(PHP_BINARY) ? escapeshellarg(PHP_BINARY) : 'php';
 
-        $cmd = 'php -S ' . self::$host .':' . self::$port . ' -t ' . $script;
+        $cmd = $php . ' -S ' . self::$host . ':' . self::$port . ' -t ' . $script;
 
         if ($this->runAs && get_current_user() !== $this->runAs) {
             if (!$this->isSuperUser()) {
@@ -97,16 +101,23 @@ class RunServerListener implements EventSubscriberInterface
 
         if ($this->isVerbose()) {
             $this->prepareDiagnosticFiles();
+            $serverLogFile = $this->serverLogFile;
+            $serverPidFile = $this->serverPidFile;
+            $serverExitFile = $this->serverExitFile;
+            $serverWrapperFile = $this->serverWrapperFile;
+            if ($serverLogFile === null || $serverPidFile === null || $serverExitFile === null || $serverWrapperFile === null) {
+                throw new ServerException('Unable to create temporary log file for PHP built-in server');
+            }
+            $this->writeVerboseServerWrapper(
+                $cmd,
+                $serverLogFile,
+                $serverPidFile,
+                $serverExitFile,
+                $serverWrapperFile
+            );
             $fullCmd = $this->parseCommand(sprintf(
-                'nohup sh -c %s >/dev/null 2>&1 & echo $!',
-                escapeshellarg(sprintf(
-                    '%s > %s 2>&1 & echo $! > %s; wait $(cat %s); echo $? > %s',
-                    $cmd,
-                    $this->serverLogFile,
-                    $this->serverPidFile,
-                    $this->serverPidFile,
-                    $this->serverExitFile
-                ))
+                'nohup sh %s >/dev/null 2>&1 & echo $!',
+                escapeshellarg($serverWrapperFile)
             ));
         } else {
             $fullCmd = $this->parseCommand(sprintf(
@@ -141,9 +152,11 @@ class RunServerListener implements EventSubscriberInterface
                 $this->reportExitStatus();
                 $this->flushServerOutput();
             }
+            $details = implode("\n", $this->diagnosticMessages);
             throw new ServerException(
                 'Failed to start server. Is something already running on port ' . self::$port . "?\n" .
-                'Full command: ' . $fullCmd
+                'Full command: ' . $fullCmd .
+                ($details !== '' ? "\n" . $details : '')
             );
         }
 
@@ -171,6 +184,9 @@ class RunServerListener implements EventSubscriberInterface
             return true;
         }
         $groups = posix_getgroups();
+        if ($groups === false) {
+            return false;
+        }
         foreach ($groups as $group) {
             if ($group == 'sudo' || $group == 'wheel') {
                 return true;
@@ -202,7 +218,7 @@ class RunServerListener implements EventSubscriberInterface
     {
         $trackedPid = $this->pid;
 
-        if ($this->isVerbose() && $trackedPid && $trackedPid !== '0' && !$this->isRunning()) {
+        if ($this->isVerbose() && $trackedPid !== '0' && !$this->isRunning()) {
             $this->writeDiagnostic(sprintf(
                 'Teardown: server process already gone (pid was %s).',
                 $trackedPid
@@ -329,10 +345,15 @@ class RunServerListener implements EventSubscriberInterface
      */
     private function findOpenPort(): int
     {
+        /** @psalm-suppress UndefinedConstant */
         $sock = socket_create(AF_INET, SOCK_STREAM, 0);
+        if ($sock === false) {
+            throw new ServerException('Could not create socket');
+        }
 
         // Bind the socket to an address/port
         if (!socket_bind($sock, self::$host, 0)) {
+            socket_close($sock);
             throw new ServerException('Could not bind to address');
         }
 
@@ -361,13 +382,17 @@ class RunServerListener implements EventSubscriberInterface
         $this->serverLogFile = $base . '.log';
         $this->serverExitFile = $base . '.exit';
         $this->serverPidFile = $base . '.pid';
+        $this->serverWrapperFile = $base . '.sh';
         @unlink($base);
-        touch($this->serverLogFile);
+        foreach ([$this->serverLogFile, $this->serverExitFile, $this->serverPidFile] as $file) {
+            touch($file);
+            @chmod($file, 0666);
+        }
     }
 
     private function cleanupDiagnosticFiles(): void
     {
-        foreach ([$this->serverLogFile, $this->serverExitFile, $this->serverPidFile] as $file) {
+        foreach ([$this->serverLogFile, $this->serverExitFile, $this->serverPidFile, $this->serverWrapperFile] as $file) {
             if (is_string($file) && is_file($file)) {
                 @unlink($file);
             }
@@ -375,6 +400,37 @@ class RunServerListener implements EventSubscriberInterface
         $this->serverLogFile = null;
         $this->serverExitFile = null;
         $this->serverPidFile = null;
+        $this->serverWrapperFile = null;
+    }
+
+    private function writeVerboseServerWrapper(
+        string $cmd,
+        string $serverLogFile,
+        string $serverPidFile,
+        string $serverExitFile,
+        string $wrapperFile,
+    ): void {
+        $pathPrefix = '';
+        if (PHP_BINARY !== '' && is_file(PHP_BINARY)) {
+            $pathPrefix = sprintf("PATH=%s:\"\$PATH\"\nexport PATH\n", escapeshellarg(dirname(PHP_BINARY)));
+        }
+
+        $script = $pathPrefix . sprintf(
+            "%s > %s 2>&1 &\n" .
+            "echo \$! > %s\n" .
+            "wait \$(cat %s)\n" .
+            "echo \$? > %s\n",
+            $cmd,
+            escapeshellarg($serverLogFile),
+            escapeshellarg($serverPidFile),
+            escapeshellarg($serverPidFile),
+            escapeshellarg($serverExitFile)
+        );
+
+        if (file_put_contents($wrapperFile, $script) === false) {
+            throw new ServerException('Unable to create PHP built-in server wrapper script');
+        }
+        @chmod($wrapperFile, 0755);
     }
 
     private function readPhpServerPid(string $wrapperPid): string
@@ -478,7 +534,14 @@ class RunServerListener implements EventSubscriberInterface
             return;
         }
 
-        $output = (string)file_get_contents($this->serverLogFile);
+        $output = @file_get_contents($this->serverLogFile);
+        if ($output === false) {
+            $this->writeDiagnostic(sprintf(
+                'Server stdout/stderr log unreadable: %s',
+                $this->serverLogFile
+            ));
+            return;
+        }
         if ($output === '') {
             $this->writeDiagnostic('Server stdout/stderr: (empty)');
             return;
