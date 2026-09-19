@@ -1,25 +1,10 @@
 <?php
-/**
- * @copyright Copyright (c) 2026, LibreCode coop and contributors
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
- */
 
 declare(strict_types=1);
+/**
+ * SPDX-FileCopyrightText: 2026 LibreCode coop and contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
 
 namespace PhpBuiltin\Tests\Unit;
 
@@ -74,9 +59,51 @@ final class RunServerListenerTest extends TestCase
 
         $messages = implode("\n", $listener->getDiagnosticMessages());
         $this->assertStringContainsString('Stopping PHP built-in server pid=', $messages);
-        $this->assertMatchesRegularExpression('/Server process exit status: \d+/', $messages);
+        $this->assertMatchesRegularExpression('/Server process exit status: \d+( \(.+\))?/', $messages);
         $this->assertStringContainsString('Server stdout/stderr:', $messages);
         $this->assertFalse($listener->isRunning());
+    }
+
+    /**
+     * @dataProvider unexpectedTerminationSignals
+     */
+    public function testVerboseModePreservesUnexpectedTerminationStatus(
+        string $signal,
+        int $expectedStatus,
+        string $expectedLabel,
+    ): void {
+        if (PHP_OS_FAMILY === 'Windows') {
+            $this->markTestSkipped('Signal-based termination is only asserted on Unix.');
+        }
+
+        $listener = new RunServerListener(0, $this->docRoot, '127.0.0.1', '', 0);
+        $listener->start();
+        $this->assertTrue($listener->isRunning());
+
+        $pid = (int)$this->extractPidFromDiagnostics($listener->getDiagnosticMessages());
+        $this->sendSignal($pid, $signal);
+        $this->waitUntilGone($listener);
+
+        $listener->stop();
+
+        $messages = implode("\n", $listener->getDiagnosticMessages());
+        $this->assertStringContainsString(
+            sprintf('Server process exit status: %d (%s)', $expectedStatus, $expectedLabel),
+            $messages
+        );
+        $this->assertFalse($listener->isRunning());
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: int, 2: string}>
+     */
+    public static function unexpectedTerminationSignals(): array
+    {
+        return [
+            'SIGTERM' => ['TERM', 143, 'SIGTERM'],
+            'SIGKILL' => ['KILL', 137, 'SIGKILL'],
+            'SIGSEGV' => ['SEGV', 139, 'SIGSEGV'],
+        ];
     }
 
     public function testVerboseTeardownWhenProcessAlreadyGone(): void
@@ -109,6 +136,16 @@ final class RunServerListenerTest extends TestCase
 
         $this->assertSame([], $listener->getDiagnosticMessages());
         $this->assertFalse($listener->isRunning());
+    }
+
+    private function sendSignal(int $pid, string $signal): void
+    {
+        $command = sprintf('kill -s %s %d', $signal, $pid);
+        if (getenv('GITHUB_ACTIONS') !== false) {
+            $command = 'sudo ' . $command;
+        }
+        exec($command, $output, $exitCode);
+        $this->assertSame(0, $exitCode, sprintf('Failed to send SIG%s to pid %d', $signal, $pid));
     }
 
     /**

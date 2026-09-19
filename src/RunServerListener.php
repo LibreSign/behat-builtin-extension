@@ -1,24 +1,7 @@
 <?php
 /**
- * @copyright Copyright (c) 2022, Vitor Mattos <vitor@php.rio>
- *
- * @author Vitor Mattos <vitor@php.rio>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2022 Vitor Mattos <vitor@php.rio>
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace PhpBuiltin;
@@ -224,6 +207,7 @@ class RunServerListener implements EventSubscriberInterface
                 'Teardown: server process already gone (pid was %s).',
                 $trackedPid
             ));
+            $this->waitForExitFile(40);
             $this->reportExitStatus();
             $this->flushServerOutput();
             $this->killZombies();
@@ -455,7 +439,36 @@ class RunServerListener implements EventSubscriberInterface
             return;
         }
 
-        $this->writeDiagnostic(sprintf('Server process exit status: %s', $status));
+        $this->writeDiagnostic(sprintf('Server process exit status: %s', $this->formatExitStatus($status)));
+    }
+
+    private function formatExitStatus(string $status): string
+    {
+        if (!ctype_digit($status)) {
+            return $status;
+        }
+
+        $code = (int)$status;
+        $signalName = $this->signalNameFromWaitStatus($code);
+        if ($signalName === null) {
+            return (string)$code;
+        }
+
+        return sprintf('%d (%s)', $code, $signalName);
+    }
+
+    private function signalNameFromWaitStatus(int $code): ?string
+    {
+        if ($code < 128) {
+            return null;
+        }
+
+        return match ($code - 128) {
+            9 => 'SIGKILL',
+            11 => 'SIGSEGV',
+            15 => 'SIGTERM',
+            default => sprintf('signal %d', $code - 128),
+        };
     }
 
     private function flushServerOutput(): void
