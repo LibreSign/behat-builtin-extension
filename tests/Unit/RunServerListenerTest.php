@@ -80,7 +80,7 @@ final class RunServerListenerTest extends TestCase
         $listener->start();
         $this->assertTrue($listener->isRunning());
 
-        $pid = (int)$this->extractPidFromDiagnostics($listener->getDiagnosticMessages());
+        $pid = $this->extractPidFromDiagnostics($listener->getDiagnosticMessages());
         $this->sendSignal($pid, $signal);
         $this->waitUntilGone($listener);
 
@@ -113,7 +113,7 @@ final class RunServerListenerTest extends TestCase
         $this->assertTrue($listener->isRunning());
 
         $pid = $this->extractPidFromDiagnostics($listener->getDiagnosticMessages());
-        exec('kill ' . $pid);
+        $this->sendSignal($pid, 'TERM');
         $this->waitUntilGone($listener);
 
         $listener->stop();
@@ -151,11 +151,11 @@ final class RunServerListenerTest extends TestCase
     /**
      * @param list<string> $messages
      */
-    private function extractPidFromDiagnostics(array $messages): string
+    private function extractPidFromDiagnostics(array $messages): int
     {
         foreach ($messages as $message) {
             if (preg_match('/pid=(\d+)/', $message, $matches) === 1) {
-                return $matches[1];
+                return (int)$matches[1];
             }
         }
         $this->fail('PID not found in diagnostic messages');
