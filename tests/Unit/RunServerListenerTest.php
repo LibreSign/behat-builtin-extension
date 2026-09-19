@@ -1,0 +1,327 @@
+<?php
+
+declare(strict_types=1);
+/**
+ * SPDX-FileCopyrightText: 2026 LibreCode coop and contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+namespace PhpBuiltin\Tests\Unit;
+
+use PhpBuiltin\RunServerListener;
+use PHPUnit\Framework\TestCase;
+
+final class RunServerListenerTest extends TestCase
+{
+    private string $docRoot;
+
+    protected function setUp(): void
+    {
+        $this->docRoot = sys_get_temp_dir() . '/behat-php-server-docroot-' . uniqid('', true);
+        mkdir($this->docRoot);
+        file_put_contents($this->docRoot . '/index.php', "<?php echo 'ok';\n");
+    }
+
+    protected function tearDown(): void
+    {
+        $listener = RunServerListener::getInstance();
+        if ($listener->isRunning()) {
+            $listener->stop();
+        }
+        $this->removeDir($this->docRoot);
+    }
+
+    public function testVerboseStartReportsProcessDetails(): void
+    {
+        $listener = new RunServerListener(0, $this->docRoot, '127.0.0.1', '', 2);
+        $listener->start();
+
+        $messages = implode("\n", $listener->getDiagnosticMessages());
+        $this->assertMatchesRegularExpression(
+            '/Started PHP built-in server pid=\d+ host=127\.0\.0\.1 port=\d+ workers=2 log=.+/',
+            $messages
+        );
+        $this->assertTrue($listener->isRunning());
+        $this->assertNotNull($listener->getServerLogFile());
+        $this->assertFileExists((string)$listener->getServerLogFile());
+
+        $port = $listener->getPort();
+        $pid = $this->extractPidFromDiagnostics($listener->getDiagnosticMessages());
+        $workerPids = $this->waitForChildProcesses($pid, 1);
+
+        $listener->stop();
+
+        $this->assertFalse($listener->isRunning());
+        $this->assertFalse($this->isPidAlive($pid), 'Main server PID should be gone after stop()');
+        foreach ($workerPids as $workerPid) {
+            $this->assertFalse(
+                $this->isPidAlive($workerPid),
+                sprintf('Worker PID %d should be gone after stop()', $workerPid)
+            );
+        }
+        $this->assertTrue(
+            $this->canBindPort('127.0.0.1', $port),
+            sprintf('Port %d should be free after stop() with workers=2', $port)
+        );
+    }
+
+    public function testStopWithWorkersAllowsRestartOnSamePort(): void
+    {
+        $listener = new RunServerListener(0, $this->docRoot, '127.0.0.1', '', 2);
+        $listener->start();
+        $port = $listener->getPort();
+        $this->assertTrue($listener->isRunning());
+        $listener->stop();
+        $this->assertFalse($listener->isRunning());
+        $this->assertTrue($this->canBindPort('127.0.0.1', $port));
+
+        $restarted = new RunServerListener(0, $this->docRoot, '127.0.0.1', '', 2);
+        $restarted->start();
+        $this->assertSame($port, $restarted->getPort());
+        $this->assertTrue($restarted->isRunning());
+        $restarted->stop();
+        $this->assertFalse($restarted->isRunning());
+        $this->assertTrue($this->canBindPort('127.0.0.1', $port));
+    }
+
+    public function testVerboseStopReportsExitStatusAndOutput(): void
+    {
+        $listener = new RunServerListener(0, $this->docRoot, '127.0.0.1', '', 0);
+        $listener->start();
+        $this->assertTrue($listener->isRunning());
+
+        @file_get_contents($listener::getServerRoot());
+        $listener->stop();
+
+        $messages = implode("\n", $listener->getDiagnosticMessages());
+        $this->assertStringContainsString('Stopping PHP built-in server pid=', $messages);
+        $this->assertMatchesRegularExpression('/Server process exit status: \d+( \(.+\))?/', $messages);
+        $this->assertStringContainsString('Server stdout/stderr:', $messages);
+        $this->assertFalse($listener->isRunning());
+    }
+
+    /**
+     * @dataProvider unexpectedTerminationSignals
+     */
+    public function testVerboseModePreservesUnexpectedTerminationStatus(
+        string $signal,
+        int $expectedStatus,
+        string $expectedLabel,
+    ): void {
+        if (PHP_OS_FAMILY === 'Windows') {
+            $this->markTestSkipped('Signal-based termination is only asserted on Unix.');
+        }
+
+        $listener = new RunServerListener(0, $this->docRoot, '127.0.0.1', '', 0);
+        $listener->start();
+        $this->assertTrue($listener->isRunning());
+
+        $pid = $this->extractPidFromDiagnostics($listener->getDiagnosticMessages());
+        $this->sendSignal($pid, $signal);
+        $this->waitUntilGone($listener);
+
+        $listener->stop();
+
+        $messages = implode("\n", $listener->getDiagnosticMessages());
+        $this->assertStringContainsString(
+            sprintf('Server process exit status: %d (possibly %s)', $expectedStatus, $expectedLabel),
+            $messages
+        );
+        $this->assertStringContainsString('Server stdout/stderr:', $messages);
+        $this->assertFalse($listener->isRunning());
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: int, 2: string}>
+     */
+    public static function unexpectedTerminationSignals(): array
+    {
+        return [
+            'SIGTERM' => ['TERM', 143, 'SIGTERM'],
+            'SIGKILL' => ['KILL', 137, 'SIGKILL'],
+            'SIGSEGV' => ['SEGV', 139, 'SIGSEGV'],
+        ];
+    }
+
+    public function testVerboseTeardownWhenProcessAlreadyGone(): void
+    {
+        $listener = new RunServerListener(0, $this->docRoot, '127.0.0.1', '', 0);
+        $listener->start();
+        $this->assertTrue($listener->isRunning());
+
+        $pid = $this->extractPidFromDiagnostics($listener->getDiagnosticMessages());
+        $this->sendSignal($pid, 'TERM');
+        $this->waitUntilGone($listener);
+
+        $listener->stop();
+
+        $messages = implode("\n", $listener->getDiagnosticMessages());
+        $this->assertStringContainsString(
+            sprintf('Teardown: server process already gone (pid was %s).', $pid),
+            $messages
+        );
+        $this->assertStringContainsString('Server process exit status: 143 (possibly SIGTERM)', $messages);
+        $this->assertStringContainsString('Server stdout/stderr:', $messages);
+        $this->assertStringNotContainsString('No such process', $messages);
+        $this->assertFalse($listener->isRunning());
+    }
+
+    public function testVerboseStartFailureIncludesServerOutput(): void
+    {
+        $invalidRoot = $this->docRoot . '/not-a-directory.php';
+        file_put_contents($invalidRoot, "<?php echo 'nope';\n");
+
+        $listener = new RunServerListener(0, $invalidRoot, '127.0.0.1', '', 0);
+
+        try {
+            $listener->start();
+            $this->fail('Expected server start to fail for an invalid document root.');
+        } catch (\PhpBuiltin\Exception\ServerException $exception) {
+            $messages = $exception->getMessage() . "\n" . implode("\n", $listener->getDiagnosticMessages());
+            $this->assertStringContainsString('Failed to start server', $messages);
+            $this->assertTrue(
+                str_contains($messages, 'Server stdout/stderr:')
+                || str_contains($messages, 'Server stdout/stderr log unreadable:')
+                || str_contains($messages, 'Server process exit status:'),
+                'Startup failure should preserve PHP built-in server output or exit status. Got: ' . $messages
+            );
+            $this->assertFalse($listener->isRunning());
+        }
+    }
+
+    public function testNonVerboseStopDoesNotEmitDiagnostics(): void
+    {
+        $listener = new RunServerListener(null, $this->docRoot, '127.0.0.1', '', 0);
+        $listener->start();
+        $this->assertTrue($listener->isRunning());
+        $listener->stop();
+
+        $this->assertSame([], $listener->getDiagnosticMessages());
+        $this->assertFalse($listener->isRunning());
+    }
+
+    private function waitForChildProcesses(int $parentPid, int $minimumCount): array
+    {
+        for ($i = 0; $i < 40; $i++) {
+            $children = $this->childPids($parentPid);
+            if (count($children) >= $minimumCount) {
+                return $children;
+            }
+            usleep(50000);
+        }
+
+        $this->fail(sprintf(
+            'Expected at least %d child worker process(es) for pid %d',
+            $minimumCount,
+            $parentPid
+        ));
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function childPids(int $parentPid): array
+    {
+        $output = [];
+        exec(sprintf('pgrep -P %d', $parentPid), $output, $exitCode);
+        if ($exitCode !== 0) {
+            return [];
+        }
+
+        $pids = [];
+        foreach ($output as $line) {
+            $pid = (int) trim($line);
+            if ($pid > 0) {
+                $pids[] = $pid;
+            }
+        }
+
+        return $pids;
+    }
+
+    private function isPidAlive(int $pid): bool
+    {
+        if ($pid <= 0) {
+            return false;
+        }
+        exec(sprintf('ps %d', $pid), $result);
+
+        return count($result) > 1;
+    }
+
+    private function canBindPort(string $host, int $port): bool
+    {
+        $sock = @socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
+        if ($sock === false) {
+            return false;
+        }
+        socket_set_option($sock, SOL_SOCKET, SO_REUSEADDR, 1);
+        $bound = @socket_bind($sock, $host, $port);
+        socket_close($sock);
+
+        return $bound === true;
+    }
+
+    private function sendSignal(int $pid, string $signal): void
+    {
+        $command = sprintf('kill -s %s %d', $signal, $pid);
+        if ($this->isForeignProcess($pid)) {
+            $command = 'sudo ' . $command;
+        }
+        exec($command, $output, $exitCode);
+        $this->assertSame(0, $exitCode, sprintf('Failed to send SIG%s to pid %d', $signal, $pid));
+    }
+
+    private function isForeignProcess(int $pid): bool
+    {
+        exec(sprintf('ps -o uid= -p %d', $pid), $output, $exitCode);
+        if ($exitCode !== 0 || $output === []) {
+            return false;
+        }
+
+        return (int) trim($output[0]) !== posix_getuid();
+    }
+
+    /**
+     * @param list<string> $messages
+     */
+    private function extractPidFromDiagnostics(array $messages): int
+    {
+        foreach ($messages as $message) {
+            if (preg_match('/pid=(\d+)/', $message, $matches) === 1) {
+                return (int)$matches[1];
+            }
+        }
+        $this->fail('PID not found in diagnostic messages');
+    }
+
+    private function waitUntilGone(RunServerListener $listener): void
+    {
+        for ($i = 0; $i < 40; $i++) {
+            if (!$listener->isRunning()) {
+                return;
+            }
+            usleep(50000);
+        }
+        $this->fail('Server process did not exit after kill');
+    }
+
+    private function removeDir(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+        foreach (scandir($dir) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $path = $dir . '/' . $entry;
+            if (is_dir($path)) {
+                $this->removeDir($path);
+            } else {
+                @unlink($path);
+            }
+        }
+        @rmdir($dir);
+    }
+}

@@ -1,28 +1,30 @@
-name: Psalm
+name: PHPUnit
 on: pull_request
 
 jobs:
-  psalm:
+  unit:
     runs-on: ubuntu-latest
+
     strategy:
       fail-fast: false
       matrix:
         php-versions: ['8.2', '8.3', '8.4', '8.5']
 
-    name: psalm php${{ matrix.php-versions }}
+    name: php${{ matrix.php-versions }}
 
     steps:
-      - name: Checkout
+      - name: Checkout app
         uses: actions/checkout@v4
 
-      - name: Set up php
+      - name: Set up php ${{ matrix.php-versions }}
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php-versions }}
+          extensions: sockets
           coverage: none
 
-      - name: Install dependencies
-        run: composer i
+      - name: Set up dependencies
+        run: composer install
 
-      - name: Run Psalm
-        run: vendor/bin/psalm
+      - name: Run unit tests
+        run: composer test:unit

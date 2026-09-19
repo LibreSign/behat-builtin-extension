@@ -8,9 +8,13 @@ jobs:
       # do not stop on another job's failure
       fail-fast: false
       matrix:
-        php-versions: ['8.1', '8.2', '8.3']
+        php-versions: ['8.2', '8.3', '8.4', '8.5']
         include:
           - php-versions: '8.3'
+            PHP_CS_FIXER_IGNORE_ENV: 1
+          - php-versions: '8.4'
+            PHP_CS_FIXER_IGNORE_ENV: 1
+          - php-versions: '8.5'
             PHP_CS_FIXER_IGNORE_ENV: 1
 
     name: php-cs check php${{ matrix.php-versions }}
