@@ -115,10 +115,17 @@ final class RunServerListener implements EventSubscriberInterface
                 $serverExitFile,
                 $serverWrapperFile
             );
-            $fullCmd = $this->parseCommand(sprintf(
-                'nohup sh %s >/dev/null 2>&1 & echo $!',
-                escapeshellarg($serverWrapperFile)
-            ));
+            // Do not wrap this start with sudo: on GitHub Actions, `sudo nohup sh /tmp/...`
+            // fails silently (outer stdout/stderr discarded) and never writes pid/log/exit.
+            // Privileged start is only required when runAs is configured.
+            $fullCmd = sprintf(
+                'nohup sh %s >>%s 2>&1 & echo $!',
+                escapeshellarg($serverWrapperFile),
+                escapeshellarg($serverLogFile)
+            );
+            if ($this->runAs !== '') {
+                $fullCmd = $this->parseCommand($fullCmd);
+            }
         } else {
             $fullCmd = $this->parseCommand(sprintf(
                 '%s > /dev/null 2>&1 & echo $!',
@@ -149,6 +156,7 @@ final class RunServerListener implements EventSubscriberInterface
 
         if (!$this->isRunning()) {
             if ($this->isVerbose()) {
+                $this->waitForExitFile(40);
                 $this->reportExitStatus();
                 $this->flushServerOutput();
             }
@@ -416,10 +424,12 @@ final class RunServerListener implements EventSubscriberInterface
         }
 
         $script = $pathPrefix . sprintf(
-            "%s > %s 2>&1 &\n" .
+            "echo wrapper-start > %s\n" .
+            "%s >> %s 2>&1 &\n" .
             "echo \$! > %s\n" .
             "wait \$(cat %s)\n" .
             "echo \$? > %s\n",
+            escapeshellarg($serverLogFile),
             $cmd,
             escapeshellarg($serverLogFile),
             escapeshellarg($serverPidFile),
