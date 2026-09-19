@@ -3,6 +3,6 @@
         "vimeo/psalm": "^5.4"
     },
     "platform": {
-        "php": "8.1"
+        "php": "8.2"
     }
 }
