@@ -845,7 +845,7 @@ final class RunServerListener implements EventSubscriberInterface
             "      previous=\"\$current\"\n" .
             "    fi\n" .
             "    if [ \"\$sample\" -eq 0 ]; then\n" .
-            "      printf '%s\\n' \"\$(date -u '+%Y-%m-%dT%H:%M:%SZ')\" >> %s\n" .
+            "      printf '%%s\\n' \"\$(date -u '+%%Y-%%m-%%dT%%H:%%M:%%SZ')\" >> %s\n" .
             "      ps -o pid=,ppid=,pgid=,stat=,rss=,vsz=,pcpu=,pmem=,etime=,args= -p \"\$server_pid\" --ppid \"\$server_pid\" >> %s 2>&1 || true\n" .
             "      sample=10\n" .
             "    fi\n" .
