@@ -7,6 +7,8 @@
 
 namespace PhpBuiltin;
 
+use Behat\Behat\EventDispatcher\Event\AfterScenarioTested;
+use Behat\Behat\EventDispatcher\Event\BeforeScenarioTested;
 use Behat\Testwork\EventDispatcher\Event\AfterSuiteTested;
 use Behat\Testwork\EventDispatcher\Event\BeforeSuiteTeardown;
 use Behat\Testwork\EventDispatcher\Event\BeforeSuiteTested;
@@ -28,6 +30,8 @@ final class RunServerListener implements EventSubscriberInterface
     private ?string $serverPidFile = null;
     private ?string $serverWrapperFile = null;
     private string $processGroupId = '0';
+    private bool $unexpectedServerFailure = false;
+    private int $observedWorkerCount = 0;
     /** @var list<string> */
     private array $diagnosticMessages = [];
 
@@ -51,6 +55,8 @@ final class RunServerListener implements EventSubscriberInterface
     {
         return array(
             BeforeSuiteTested::BEFORE => 'beforeSuite',
+            BeforeScenarioTested::BEFORE => 'beforeScenario',
+            AfterScenarioTested::AFTER => 'afterScenario',
             BeforeSuiteTeardown::AFTER => 'afterSuite'
         );
     }
@@ -60,8 +66,66 @@ final class RunServerListener implements EventSubscriberInterface
         $this->start();
     }
 
+    public function beforeScenario(BeforeScenarioTested $event): void
+    {
+        $this->assertServerHealthy('before scenario');
+    }
+
+    public function afterScenario(AfterScenarioTested $event): void
+    {
+        $this->assertServerHealthy('after scenario');
+    }
+
+    /**
+     * Fail as an infrastructure error as soon as the server is no longer usable.
+     *
+     * This deliberately does not restart the server: a request may have changed
+     * application state before PHP terminated, so continuing with a fresh server
+     * could hide the original failure and make following scenarios unreliable.
+     */
+    public function assertServerHealthy(string $checkpoint = 'health check'): void
+    {
+        if ($this->pid === '0') {
+            return;
+        }
+
+        $processAlive = $this->isRunning();
+        $portReachable = $this->isServerPortInUse();
+        $liveWorkerCount = $processAlive && $this->workers > 0
+            ? count($this->collectDescendantPids($this->pid))
+            : 0;
+        $workersHealthy = $this->observedWorkerCount === 0 || $liveWorkerCount >= $this->observedWorkerCount;
+
+        if ($processAlive && $portReachable && $workersHealthy) {
+            return;
+        }
+
+        $this->unexpectedServerFailure = true;
+        $this->captureFailureSnapshot(
+            $checkpoint,
+            $processAlive,
+            $portReachable,
+            $liveWorkerCount
+        );
+        $this->waitForExitFile(40);
+        $this->reportExitStatus();
+        $this->flushServerOutput();
+
+        throw new ServerException(sprintf(
+            'PHP built-in server became unhealthy during %s (pid=%s, process=%s, port=%s, workers=%d/%d).',
+            $checkpoint,
+            $this->pid,
+            $processAlive ? 'alive' : 'gone',
+            $portReachable ? 'reachable' : 'unreachable',
+            $liveWorkerCount,
+            $this->observedWorkerCount
+        ));
+    }
+
     public function start(): void
     {
+        $this->unexpectedServerFailure = false;
+        $this->observedWorkerCount = 0;
         $this->killZombies();
         if ($this->isRunning()) {
             return;
@@ -174,13 +238,24 @@ final class RunServerListener implements EventSubscriberInterface
             );
         }
 
+        if ($this->workers > 0) {
+            for ($i = 0; $i < 20; $i++) {
+                $this->observedWorkerCount = count($this->collectDescendantPids($this->pid));
+                if ($this->observedWorkerCount >= $this->workers) {
+                    break;
+                }
+                usleep(50000);
+            }
+        }
+
         if ($this->isVerbose()) {
             $this->writeDiagnostic(sprintf(
-                'Started PHP built-in server pid=%s host=%s port=%d workers=%d log=%s',
+                'Started PHP built-in server pid=%s host=%s port=%d workers=%d observed_workers=%d log=%s',
                 $this->pid,
                 self::$host,
                 self::$port,
                 $this->workers,
+                $this->observedWorkerCount,
                 $this->serverLogFile ?? '(none)'
             ));
         }
@@ -243,7 +318,10 @@ final class RunServerListener implements EventSubscriberInterface
             $this->flushServerOutput();
             $this->pid = '0';
             $this->processGroupId = '0';
-            $this->cleanupDiagnosticFiles();
+            $this->observedWorkerCount = 0;
+            if (!$this->unexpectedServerFailure) {
+                $this->cleanupDiagnosticFiles();
+            }
             return;
         }
 
@@ -262,7 +340,59 @@ final class RunServerListener implements EventSubscriberInterface
 
         $this->pid = '0';
         $this->processGroupId = '0';
-        $this->cleanupDiagnosticFiles();
+        $this->observedWorkerCount = 0;
+        if (!$this->unexpectedServerFailure) {
+            $this->cleanupDiagnosticFiles();
+        }
+    }
+
+    /**
+     * Capture process and listener state at the first moment a server failure is observed.
+     */
+    private function captureFailureSnapshot(
+        string $checkpoint,
+        bool $processAlive,
+        bool $portReachable,
+        int $liveWorkerCount,
+    ): void {
+        if (!$this->isVerbose()) {
+            return;
+        }
+
+        $this->writeDiagnostic(sprintf(
+            'SERVER FAILURE DETECTED checkpoint=%s pid=%s pgid=%s process=%s port=%s host=%s:%d workers=%d/%d',
+            $checkpoint,
+            $this->pid,
+            $this->processGroupId,
+            $processAlive ? 'alive' : 'gone',
+            $portReachable ? 'reachable' : 'unreachable',
+            self::$host,
+            self::$port,
+            $liveWorkerCount,
+            $this->observedWorkerCount
+        ));
+
+        $commands = [
+            'server process group' => sprintf(
+                'ps -o pid,ppid,pgid,sid,user,stat,etime,rss,vsz,pcpu,pmem,args --forest -g %s 2>&1',
+                escapeshellarg($this->processGroupId)
+            ),
+            'listener state' => sprintf('lsof -nP -iTCP:%d -sTCP:LISTEN 2>&1', self::$port),
+            'memory' => 'free -m 2>&1',
+            'core limit' => 'sh -c "ulimit -c" 2>&1',
+            'core pattern' => 'cat /proc/sys/kernel/core_pattern 2>&1',
+        ];
+
+        foreach ($commands as $label => $command) {
+            $output = [];
+            exec($command, $output, $exitCode);
+            $this->writeDiagnostic(sprintf(
+                "%s (exit=%d):\n%s",
+                $label,
+                $exitCode,
+                $output === [] ? '(empty)' : implode("\n", $output)
+            ));
+        }
     }
 
     /**
@@ -566,6 +696,19 @@ final class RunServerListener implements EventSubscriberInterface
         return $this->serverLogFile;
     }
 
+    /**
+     * @return array{log: ?string, exit: ?string, pid: ?string, wrapper: ?string}
+     */
+    public function getDiagnosticFiles(): array
+    {
+        return [
+            'log' => $this->serverLogFile,
+            'exit' => $this->serverExitFile,
+            'pid' => $this->serverPidFile,
+            'wrapper' => $this->serverWrapperFile,
+        ];
+    }
+
     public function isVerbose(): bool
     {
         return is_numeric($this->verbose);
@@ -652,6 +795,7 @@ final class RunServerListener implements EventSubscriberInterface
 
         $script = $pathPrefix . sprintf(
             "echo wrapper-start > %s\n" .
+            "ulimit -c unlimited 2>/dev/null || true\n" .
             "%s >> %s 2>&1 &\n" .
             "echo \$! > %s\n" .
             "wait \$(cat %s)\n" .
