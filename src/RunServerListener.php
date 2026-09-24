@@ -813,34 +813,34 @@ final class RunServerListener implements EventSubscriberInterface
         $workerMonitor = '';
         if ($this->workers > 0) {
             $workerMonitor = sprintf(
-                "server_pid=\\$(cat %s)\\n" .
-                "(\\n" .
-                "  previous=''\\n" .
-                "  while kill -0 \\\"\\$server_pid\\\" 2>/dev/null; do\\n" .
-                "    current=\\$(pgrep -P \\\"\\$server_pid\\\" 2>/dev/null | sort -n | tr '\\\\n' ',' | sed 's/,$//')\\n" .
-                "    if [ \\\"\\$current\\\" != \\\"\\$previous\\\" ]; then\\n" .
-                "      printf '%s master=%s workers=[%s]\\\\n' \\\"\\$(date -u '+%Y-%m-%dT%H:%M:%SZ')\\\" \\\"\\$server_pid\\\" \\\"\\$current\\\" >> %s\\n" .
-                "      previous=\\\"\\$current\\\"\\n" .
-                "    fi\\n" .
-                "    sleep 0.1\\n" .
-                "  done\\n" .
-                ") &\\n" .
-                "monitor_pid=\\$!\\n",
+                "server_pid=\$(cat %s)\n" .
+                "(\n" .
+                "  previous=''\n" .
+                "  while kill -0 \"\$server_pid\" 2>/dev/null; do\n" .
+                "    current=\$(pgrep -P \"\$server_pid\" 2>/dev/null | sort -n | tr '\\n' ',' | sed 's/,$//')\n" .
+                "    if [ \"\$current\" != \"\$previous\" ]; then\n" .
+                "      printf '%%s master=%%s workers=[%%s]\\n' \"\$(date -u '+%%Y-%%m-%%dT%%H:%%M:%%SZ')\" \"\$server_pid\" \"\$current\" >> %s\n" .
+                "      previous=\"\$current\"\n" .
+                "    fi\n" .
+                "    sleep 0.1\n" .
+                "  done\n" .
+                ") &\n" .
+                "monitor_pid=\$!\n",
                 escapeshellarg($serverPidFile),
                 escapeshellarg($workerMonitorFile)
             );
         }
 
         $script = $pathPrefix . sprintf(
-            "echo wrapper-start > %s\\n" .
-            "ulimit -c unlimited 2>/dev/null || true\\n" .
-            "%s >> %s 2>&1 &\\n" .
-            "echo \\$! > %s\\n" .
+            "echo wrapper-start > %s\n" .
+            "ulimit -c unlimited 2>/dev/null || true\n" .
+            "%s >> %s 2>&1 &\n" .
+            "echo \$! > %s\n" .
             "%s" .
-            "wait \\$(cat %s)\\n" .
-            "status=\\$?\\n" .
-            "[ -z \\\"\\${monitor_pid:-}\\\" ] || { kill \\\"\\$monitor_pid\\\" 2>/dev/null || true; wait \\\"\\$monitor_pid\\\" 2>/dev/null || true; }\\n" .
-            "echo \\$status > %s\\n",
+            "wait \$(cat %s)\n" .
+            "status=\$?\n" .
+            "[ -z \"\${monitor_pid:-}\" ] || { kill \"\$monitor_pid\" 2>/dev/null || true; wait \"\$monitor_pid\" 2>/dev/null || true; }\n" .
+            "echo \$status > %s\n",
             escapeshellarg($serverLogFile),
             $this->wrapInNewSession($cmd),
             escapeshellarg($serverLogFile),
