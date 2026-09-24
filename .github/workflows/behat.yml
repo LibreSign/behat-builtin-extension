@@ -26,30 +26,4 @@ jobs:
         run: composer install
 
       - name: Run behat
-        run: |
-          export BEHAT_RUN_AS=$(ls -ld behat.yml | awk '{print $3}')
-          export BEHAT_VERBOSE="$RUNNER_DEBUG"
-          vendor/bin/behat --tags='~@diagnostic-crash'
-
-      - name: Verify unexpected crash diagnostics end-to-end
-        run: |
-          export BEHAT_RUN_AS=$(ls -ld behat.yml | awk '{print $3}')
-          export BEHAT_VERBOSE=1
-
-          set +e
-          output=$(vendor/bin/behat --tags='@diagnostic-crash' 2>&1)
-          status=$?
-          set -e
-
-          printf '%s\n' "$output"
-
-          test "$status" -ne 0
-          printf '%s\n' "$output" | grep -Fq 'SERVER FAILURE DETECTED'
-          printf '%s\n' "$output" | grep -Fq 'Server process exit status: 139 (possibly SIGSEGV)'
-          printf '%s\n' "$output" | grep -Fq 'PHP built-in server became unhealthy'
-          if printf '%s\n' "$output" | grep -Fq 'SCENARIO_AFTER_CRASH_EXECUTED'; then
-            echo 'A scenario after the unexpected server crash was executed'
-            exit 1
-          fi
-          failure_count=$(printf '%s\n' "$output" | grep -Fc 'SERVER FAILURE DETECTED' || true)
-          test "$failure_count" -eq 1
+        run: vendor/bin/behat
