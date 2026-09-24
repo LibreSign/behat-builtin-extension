@@ -7,6 +7,8 @@
 
 namespace PhpBuiltin;
 
+use Behat\Behat\EventDispatcher\Event\AfterScenarioTested;
+use Behat\Behat\EventDispatcher\Event\BeforeScenarioTested;
 use Behat\Testwork\EventDispatcher\Event\AfterSuiteTested;
 use Behat\Testwork\EventDispatcher\Event\BeforeSuiteTeardown;
 use Behat\Testwork\EventDispatcher\Event\BeforeSuiteTested;
@@ -27,7 +29,11 @@ final class RunServerListener implements EventSubscriberInterface
     private ?string $serverExitFile = null;
     private ?string $serverPidFile = null;
     private ?string $serverWrapperFile = null;
+    private ?string $workerMonitorFile = null;
+    private ?string $processMonitorFile = null;
     private string $processGroupId = '0';
+    private bool $unexpectedServerFailure = false;
+    private int $observedWorkerCount = 0;
     /** @var list<string> */
     private array $diagnosticMessages = [];
 
@@ -51,6 +57,8 @@ final class RunServerListener implements EventSubscriberInterface
     {
         return array(
             BeforeSuiteTested::BEFORE => 'beforeSuite',
+            BeforeScenarioTested::BEFORE => 'beforeScenario',
+            AfterScenarioTested::AFTER => 'afterScenario',
             BeforeSuiteTeardown::AFTER => 'afterSuite'
         );
     }
@@ -60,8 +68,73 @@ final class RunServerListener implements EventSubscriberInterface
         $this->start();
     }
 
+    public function beforeScenario(BeforeScenarioTested $event): void
+    {
+        $this->assertServerHealthy('before scenario');
+    }
+
+    public function afterScenario(AfterScenarioTested $event): void
+    {
+        $this->assertServerHealthy('after scenario');
+    }
+
+    /**
+     * Fail as an infrastructure error as soon as the server is no longer usable.
+     *
+     * This deliberately does not restart the server: a request may have changed
+     * application state before PHP terminated, so continuing with a fresh server
+     * could hide the original failure and make following scenarios unreliable.
+     */
+    public function assertServerHealthy(string $checkpoint = 'health check'): void
+    {
+        if ($this->pid === '0') {
+            return;
+        }
+
+        $processAlive = $this->isRunning();
+        $portReachable = $this->isServerPortInUse();
+        $liveWorkerCount = $processAlive && $this->workers > 0
+            ? count($this->collectActiveDescendantPids($this->pid))
+            : 0;
+        $workersHealthy = !$this->isVerbose()
+            || $this->observedWorkerCount === 0
+            || $liveWorkerCount >= $this->observedWorkerCount;
+
+        if ($processAlive && $portReachable && $workersHealthy) {
+            return;
+        }
+
+        $this->unexpectedServerFailure = true;
+        $this->captureFailureSnapshot(
+            $checkpoint,
+            $processAlive,
+            $portReachable,
+            $liveWorkerCount
+        );
+        if (!$processAlive) {
+            $this->waitForExitFile(40);
+            $this->reportExitStatus();
+        }
+        $this->captureCoreDumpDiagnostics($processAlive);
+        $this->flushServerOutput();
+        $this->flushWorkerMonitorOutput();
+        $this->flushProcessMonitorOutput();
+
+        throw new ServerException(sprintf(
+            'PHP built-in server became unhealthy during %s (pid=%s, process=%s, port=%s, workers=%d/%d).',
+            $checkpoint,
+            $this->pid,
+            $processAlive ? 'alive' : 'gone',
+            $portReachable ? 'reachable' : 'unreachable',
+            $liveWorkerCount,
+            $this->observedWorkerCount
+        ));
+    }
+
     public function start(): void
     {
+        $this->unexpectedServerFailure = false;
+        $this->observedWorkerCount = 0;
         $this->killZombies();
         if ($this->isRunning()) {
             return;
@@ -111,15 +184,25 @@ final class RunServerListener implements EventSubscriberInterface
             $serverPidFile = $this->serverPidFile;
             $serverExitFile = $this->serverExitFile;
             $serverWrapperFile = $this->serverWrapperFile;
-            if ($serverLogFile === null || $serverPidFile === null || $serverExitFile === null || $serverWrapperFile === null) {
-                throw new ServerException('Unable to create temporary log file for PHP built-in server');
+            $workerMonitorFile = $this->workerMonitorFile;
+            $processMonitorFile = $this->processMonitorFile;
+            if ($serverLogFile === null
+                || $serverPidFile === null
+                || $serverExitFile === null
+                || $serverWrapperFile === null
+                || $workerMonitorFile === null
+                || $processMonitorFile === null
+            ) {
+                throw new ServerException('Unable to create temporary diagnostic files for PHP built-in server');
             }
             $this->writeVerboseServerWrapper(
                 $cmd,
                 $serverLogFile,
                 $serverPidFile,
                 $serverExitFile,
-                $serverWrapperFile
+                $serverWrapperFile,
+                $workerMonitorFile,
+                $processMonitorFile
             );
             $fullCmd = sprintf(
                 'nohup sh %s >>%s 2>&1 & echo $!',
@@ -174,13 +257,24 @@ final class RunServerListener implements EventSubscriberInterface
             );
         }
 
+        if ($this->workers > 0) {
+            for ($i = 0; $i < 20; $i++) {
+                $this->observedWorkerCount = count($this->collectActiveDescendantPids($this->pid));
+                if ($this->observedWorkerCount >= $this->workers) {
+                    break;
+                }
+                usleep(50000);
+            }
+        }
+
         if ($this->isVerbose()) {
             $this->writeDiagnostic(sprintf(
-                'Started PHP built-in server pid=%s host=%s port=%d workers=%d log=%s',
+                'Started PHP built-in server pid=%s host=%s port=%d workers=%d observed_workers=%d log=%s',
                 $this->pid,
                 self::$host,
                 self::$port,
                 $this->workers,
+                $this->observedWorkerCount,
                 $this->serverLogFile ?? '(none)'
             ));
         }
@@ -220,9 +314,7 @@ final class RunServerListener implements EventSubscriberInterface
             return false;
         }
 
-        exec(sprintf('ps %d', $this->pid), $result);
-
-        return count($result) > 1;
+        return $this->isProcessAlive($this->pid);
     }
 
     /**
@@ -241,9 +333,14 @@ final class RunServerListener implements EventSubscriberInterface
             $this->waitForExitFile(40);
             $this->reportExitStatus();
             $this->flushServerOutput();
+            $this->flushWorkerMonitorOutput();
+            $this->flushProcessMonitorOutput();
             $this->pid = '0';
             $this->processGroupId = '0';
-            $this->cleanupDiagnosticFiles();
+            $this->observedWorkerCount = 0;
+            if (!$this->unexpectedServerFailure) {
+                $this->cleanupDiagnosticFiles();
+            }
             return;
         }
 
@@ -258,11 +355,260 @@ final class RunServerListener implements EventSubscriberInterface
         if ($this->isVerbose()) {
             $this->reportExitStatus();
             $this->flushServerOutput();
+            $this->flushWorkerMonitorOutput();
+            $this->flushProcessMonitorOutput();
         }
 
         $this->pid = '0';
         $this->processGroupId = '0';
-        $this->cleanupDiagnosticFiles();
+        $this->observedWorkerCount = 0;
+        if (!$this->unexpectedServerFailure) {
+            $this->cleanupDiagnosticFiles();
+        }
+    }
+
+    /**
+     * Capture process and listener state at the first moment a server failure is observed.
+     */
+    private function captureFailureSnapshot(
+        string $checkpoint,
+        bool $processAlive,
+        bool $portReachable,
+        int $liveWorkerCount,
+    ): void {
+        if (!$this->isVerbose()) {
+            return;
+        }
+
+        $this->writeDiagnostic(sprintf(
+            'SERVER FAILURE DETECTED checkpoint=%s pid=%s pgid=%s process=%s port=%s host=%s:%d workers=%d/%d',
+            $checkpoint,
+            $this->pid,
+            $this->processGroupId,
+            $processAlive ? 'alive' : 'gone',
+            $portReachable ? 'reachable' : 'unreachable',
+            self::$host,
+            self::$port,
+            $liveWorkerCount,
+            $this->observedWorkerCount
+        ));
+
+        $this->captureZombieWorkerExitStatuses();
+
+        $commands = [
+            'server process group' => sprintf(
+                'ps -o pid,ppid,pgid,sid,user,stat,etime,rss,vsz,pcpu,pmem,args --forest -g %s 2>&1',
+                escapeshellarg($this->processGroupId)
+            ),
+            'listener state' => sprintf('lsof -nP -iTCP:%d -sTCP:LISTEN 2>&1', self::$port),
+            'memory' => 'free -m 2>&1',
+            'core limit' => 'sh -c "ulimit -c" 2>&1',
+            'core pattern' => 'cat /proc/sys/kernel/core_pattern 2>&1',
+            'PHP version' => escapeshellarg(PHP_BINARY) . ' -v 2>&1',
+            'PHP configuration' => escapeshellarg(PHP_BINARY) . ' --ini 2>&1',
+            'PHP modules' => escapeshellarg(PHP_BINARY) . ' -m 2>&1',
+        ];
+
+        foreach ($commands as $label => $command) {
+            $output = [];
+            exec($command, $output, $exitCode);
+            $this->writeDiagnostic(sprintf(
+                "%s (exit=%d):\n%s",
+                $label,
+                $exitCode,
+                $output === [] ? '(empty)' : implode("\n", $output)
+            ));
+        }
+    }
+
+    private function captureCoreDumpDiagnostics(bool $processAlive): void
+    {
+        if (PHP_OS_FAMILY !== 'Linux') {
+            return;
+        }
+
+        $candidates = $processAlive ? [] : [$this->pid];
+        foreach ($this->collectDescendantPids($this->pid) as $workerPid) {
+            if ($this->isZombieProcess($workerPid)) {
+                $candidates[] = $workerPid;
+            }
+        }
+        $candidates = array_values(array_unique($candidates));
+
+        if ($candidates === []) {
+            return;
+        }
+
+        $coredumpctl = [];
+        exec('command -v coredumpctl', $coredumpctl, $coredumpctlExitCode);
+        if ($coredumpctlExitCode !== 0 || !isset($coredumpctl[0])) {
+            $this->writeDiagnostic('Core dump analysis unavailable: coredumpctl not found.');
+            return;
+        }
+
+        $gdb = [];
+        exec('command -v gdb', $gdb, $gdbExitCode);
+        $hasGdb = $gdbExitCode === 0 && isset($gdb[0]);
+
+        foreach ($candidates as $pid) {
+            $metadata = $this->runCoreDumpCommand(sprintf(
+                'coredumpctl --no-pager --quiet info %s 2>&1',
+                escapeshellarg($pid)
+            ));
+
+            if ($metadata['exitCode'] !== 0) {
+                $this->writeDiagnostic(sprintf(
+                    "Core dump unavailable pid=%s (exit=%d):\n%s",
+                    $pid,
+                    $metadata['exitCode'],
+                    $metadata['output'] === '' ? '(no matching core dump)' : $metadata['output']
+                ));
+                continue;
+            }
+
+            $this->writeDiagnostic(sprintf(
+                "Core dump metadata pid=%s:\n%s",
+                $pid,
+                $metadata['output']
+            ));
+
+            if (!$hasGdb) {
+                $this->writeDiagnostic(sprintf(
+                    'Native backtrace unavailable pid=%s: gdb not found.',
+                    $pid
+                ));
+                continue;
+            }
+
+            $debuggerArguments = "-batch -ex 'set pagination off' "
+                . "-ex 'thread apply all bt full' "
+                . "-ex 'info registers' "
+                . "-ex 'info sharedlibrary'";
+            $backtrace = $this->runCoreDumpCommand(sprintf(
+                'coredumpctl --no-pager --quiet debug %s --debugger-arguments=%s 2>&1',
+                escapeshellarg($pid),
+                escapeshellarg($debuggerArguments)
+            ), 20);
+
+            $this->writeDiagnostic(sprintf(
+                "Native backtrace pid=%s (exit=%d):\n%s",
+                $pid,
+                $backtrace['exitCode'],
+                $backtrace['output'] === '' ? '(empty)' : $backtrace['output']
+            ));
+        }
+    }
+
+    /**
+     * @return array{exitCode: int, output: string}
+     */
+    private function runCoreDumpCommand(string $command, int $timeoutSeconds = 5): array
+    {
+        $timeoutPrefix = '';
+        $timeout = [];
+        exec('command -v timeout', $timeout, $timeoutExitCode);
+        if ($timeoutExitCode === 0 && isset($timeout[0])) {
+            $timeoutPrefix = sprintf('timeout %ds ', $timeoutSeconds);
+        }
+
+        $output = [];
+        exec($timeoutPrefix . $command, $output, $exitCode);
+        if ($exitCode !== 0) {
+            $sudoOutput = [];
+            exec('sudo -n true 2>/dev/null', $unused, $sudoAvailable);
+            if ($sudoAvailable === 0) {
+                exec($timeoutPrefix . 'sudo -n ' . $command, $sudoOutput, $sudoExitCode);
+                if ($sudoExitCode === 0) {
+                    return [
+                        'exitCode' => 0,
+                        'output' => implode("\n", $sudoOutput),
+                    ];
+                }
+            }
+        }
+
+        return [
+            'exitCode' => $exitCode,
+            'output' => implode("\n", $output),
+        ];
+    }
+
+    private function isZombieProcess(string $pid): bool
+    {
+        if ($pid === '' || $pid === '0' || !ctype_digit($pid)) {
+            return false;
+        }
+
+        $output = [];
+        exec(sprintf('ps -o stat= -p %s', $pid), $output, $exitCode);
+
+        return $exitCode === 0
+            && isset($output[0])
+            && str_starts_with(trim((string)$output[0]), 'Z');
+    }
+
+    private function captureZombieWorkerExitStatuses(): void
+    {
+        if (PHP_OS_FAMILY !== 'Linux') {
+            return;
+        }
+
+        foreach ($this->collectDescendantPids($this->pid) as $workerPid) {
+            $statFile = '/proc/' . $workerPid . '/stat';
+            if (!is_file($statFile)) {
+                continue;
+            }
+
+            $stat = @file_get_contents($statFile);
+            if (!is_string($stat) || $stat === '') {
+                continue;
+            }
+
+            $commandEnd = strrpos($stat, ') ');
+            if ($commandEnd === false) {
+                continue;
+            }
+
+            $fields = preg_split('/\s+/', substr($stat, $commandEnd + 2));
+            if (!is_array($fields) || count($fields) < 50 || $fields[0] !== 'Z') {
+                continue;
+            }
+
+            $waitStatus = (int)$fields[49];
+            $signal = $waitStatus & 0x7f;
+            $coreDumped = ($waitStatus & 0x80) !== 0;
+
+            if ($signal > 0 && $signal !== 0x7f) {
+                $this->writeDiagnostic(sprintf(
+                    'Worker termination pid=%s wait_status=%d signal=%d%s core_dumped=%s',
+                    $workerPid,
+                    $waitStatus,
+                    $signal,
+                    $this->signalName($signal),
+                    $coreDumped ? 'yes' : 'no'
+                ));
+                continue;
+            }
+
+            $this->writeDiagnostic(sprintf(
+                'Worker termination pid=%s wait_status=%d exit_code=%d',
+                $workerPid,
+                $waitStatus,
+                ($waitStatus >> 8) & 0xff
+            ));
+        }
+    }
+
+    private function signalName(int $signal): string
+    {
+        $names = [
+            6 => 'SIGABRT',
+            9 => 'SIGKILL',
+            11 => 'SIGSEGV',
+            15 => 'SIGTERM',
+        ];
+
+        return isset($names[$signal]) ? ' (' . $names[$signal] . ')' : '';
     }
 
     /**
@@ -410,6 +756,17 @@ final class RunServerListener implements EventSubscriberInterface
         }
 
         return array_keys($found);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function collectActiveDescendantPids(string $rootPid): array
+    {
+        return array_values(array_filter(
+            $this->collectDescendantPids($rootPid),
+            fn (string $pid): bool => $this->isProcessAlive($pid)
+        ));
     }
 
     /**
@@ -566,6 +923,21 @@ final class RunServerListener implements EventSubscriberInterface
         return $this->serverLogFile;
     }
 
+    /**
+     * @return array{log: ?string, exit: ?string, pid: ?string, wrapper: ?string, workers: ?string, processes: ?string}
+     */
+    public function getDiagnosticFiles(): array
+    {
+        return [
+            'log' => $this->serverLogFile,
+            'exit' => $this->serverExitFile,
+            'pid' => $this->serverPidFile,
+            'wrapper' => $this->serverWrapperFile,
+            'workers' => $this->workerMonitorFile,
+            'processes' => $this->processMonitorFile,
+        ];
+    }
+
     public function isVerbose(): bool
     {
         return is_numeric($this->verbose);
@@ -618,8 +990,10 @@ final class RunServerListener implements EventSubscriberInterface
         $this->serverExitFile = $base . '.exit';
         $this->serverPidFile = $base . '.pid';
         $this->serverWrapperFile = $base . '.sh';
+        $this->workerMonitorFile = $base . '.workers.log';
+        $this->processMonitorFile = $base . '.processes.log';
         @unlink($base);
-        foreach ([$this->serverLogFile, $this->serverExitFile, $this->serverPidFile] as $file) {
+        foreach ([$this->serverLogFile, $this->serverExitFile, $this->serverPidFile, $this->workerMonitorFile, $this->processMonitorFile] as $file) {
             touch($file);
             @chmod($file, 0666);
         }
@@ -627,7 +1001,7 @@ final class RunServerListener implements EventSubscriberInterface
 
     private function cleanupDiagnosticFiles(): void
     {
-        foreach ([$this->serverLogFile, $this->serverExitFile, $this->serverPidFile, $this->serverWrapperFile] as $file) {
+        foreach ([$this->serverLogFile, $this->serverExitFile, $this->serverPidFile, $this->serverWrapperFile, $this->workerMonitorFile, $this->processMonitorFile] as $file) {
             if (is_string($file) && is_file($file)) {
                 @unlink($file);
             }
@@ -636,6 +1010,8 @@ final class RunServerListener implements EventSubscriberInterface
         $this->serverExitFile = null;
         $this->serverPidFile = null;
         $this->serverWrapperFile = null;
+        $this->workerMonitorFile = null;
+        $this->processMonitorFile = null;
     }
 
     private function writeVerboseServerWrapper(
@@ -644,22 +1020,56 @@ final class RunServerListener implements EventSubscriberInterface
         string $serverPidFile,
         string $serverExitFile,
         string $wrapperFile,
+        string $workerMonitorFile,
+        string $processMonitorFile,
     ): void {
         $pathPrefix = '';
         if (PHP_BINARY !== '' && is_file(PHP_BINARY)) {
             $pathPrefix = sprintf("PATH=%s:\"\$PATH\"\nexport PATH\n", escapeshellarg(dirname(PHP_BINARY)));
         }
 
+        $workerMonitor = sprintf(
+            "server_pid=\$(cat %s)\n" .
+            "(\n" .
+            "  previous=''\n" .
+            "  sample=0\n" .
+            "  while kill -0 \"\$server_pid\" 2>/dev/null; do\n" .
+            "    current=\$(ps -o pid=,stat= --ppid \"\$server_pid\" 2>/dev/null | awk '{printf \"%%s:%%s,\", \$1, \$2}' | sed 's/,$//')\n" .
+            "    if [ \"\$current\" != \"\$previous\" ]; then\n" .
+            "      printf '%%s master=%%s workers=[%%s]\\n' \"\$(date -u '+%%Y-%%m-%%dT%%H:%%M:%%SZ')\" \"\$server_pid\" \"\$current\" >> %s\n" .
+            "      previous=\"\$current\"\n" .
+            "    fi\n" .
+            "    if [ \"\$sample\" -eq 0 ]; then\n" .
+            "      printf '%%s\\n' \"\$(date -u '+%%Y-%%m-%%dT%%H:%%M:%%SZ')\" >> %s\n" .
+            "      ps -o pid=,ppid=,pgid=,stat=,rss=,vsz=,pcpu=,pmem=,etime=,args= -p \"\$server_pid\" --ppid \"\$server_pid\" >> %s 2>&1 || true\n" .
+            "      sample=10\n" .
+            "    fi\n" .
+            "    sample=\$((sample - 1))\n" .
+            "    sleep 0.1\n" .
+            "  done\n" .
+            ") &\n" .
+            "monitor_pid=\$!\n",
+            escapeshellarg($serverPidFile),
+            escapeshellarg($workerMonitorFile),
+            escapeshellarg($processMonitorFile),
+            escapeshellarg($processMonitorFile)
+        );
+
         $script = $pathPrefix . sprintf(
             "echo wrapper-start > %s\n" .
+            "ulimit -c unlimited 2>/dev/null || true\n" .
             "%s >> %s 2>&1 &\n" .
             "echo \$! > %s\n" .
+            "%s" .
             "wait \$(cat %s)\n" .
-            "echo \$? > %s\n",
+            "status=\$?\n" .
+            "[ -z \"\${monitor_pid:-}\" ] || { kill \"\$monitor_pid\" 2>/dev/null || true; wait \"\$monitor_pid\" 2>/dev/null || true; }\n" .
+            "echo \$status > %s\n",
             escapeshellarg($serverLogFile),
             $this->wrapInNewSession($cmd),
             escapeshellarg($serverLogFile),
             escapeshellarg($serverPidFile),
+            $workerMonitor,
             escapeshellarg($serverPidFile),
             escapeshellarg($serverExitFile)
         );
@@ -703,8 +1113,16 @@ final class RunServerListener implements EventSubscriberInterface
         if ($pid === '' || $pid === '0') {
             return false;
         }
-        exec(sprintf('ps %d', $pid), $result);
-        return count($result) > 1;
+
+        $output = [];
+        exec(sprintf('ps -o stat= -p %s', $pid), $output, $exitCode);
+        if ($exitCode !== 0 || !isset($output[0])) {
+            return false;
+        }
+
+        $state = trim((string)$output[0]);
+
+        return $state !== '' && !str_starts_with($state, 'Z');
     }
 
     private function reportExitStatus(): void
@@ -775,6 +1193,36 @@ final class RunServerListener implements EventSubscriberInterface
         }
 
         $this->writeDiagnostic("Server stdout/stderr:\n" . rtrim($output));
+    }
+
+    private function flushWorkerMonitorOutput(): void
+    {
+        if (!$this->isVerbose() || !is_string($this->workerMonitorFile) || !is_file($this->workerMonitorFile)) {
+            return;
+        }
+
+        $output = @file_get_contents($this->workerMonitorFile);
+        if ($output === false || trim($output) === '') {
+            $this->writeDiagnostic('Worker timeline: (empty)');
+            return;
+        }
+
+        $this->writeDiagnostic("Worker timeline:\n" . rtrim($output));
+    }
+
+    private function flushProcessMonitorOutput(): void
+    {
+        if (!$this->isVerbose() || !is_string($this->processMonitorFile) || !is_file($this->processMonitorFile)) {
+            return;
+        }
+
+        $output = @file_get_contents($this->processMonitorFile);
+        if ($output === false || trim($output) === '') {
+            $this->writeDiagnostic('Process timeline: (empty)');
+            return;
+        }
+
+        $this->writeDiagnostic("Process timeline:\n" . rtrim($output));
     }
 
     private function writeDiagnostic(string $message): void
