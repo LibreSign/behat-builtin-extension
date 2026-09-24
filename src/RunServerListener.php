@@ -833,35 +833,32 @@ final class RunServerListener implements EventSubscriberInterface
             $pathPrefix = sprintf("PATH=%s:\"\$PATH\"\nexport PATH\n", escapeshellarg(dirname(PHP_BINARY)));
         }
 
-        $workerMonitor = '';
-        if ($this->workers > 0) {
-            $workerMonitor = sprintf(
-                "server_pid=\$(cat %s)\n" .
-                "(\n" .
-                "  previous=''\n" .
-                "  sample=0\n" .
-                "  while kill -0 \"\$server_pid\" 2>/dev/null; do\n" .
-                "    current=\$(ps -o pid=,stat= --ppid \"\$server_pid\" 2>/dev/null | awk '{printf \"%%s:%%s,\", \$1, \$2}' | sed 's/,$//')\n" .
-                "    if [ \"\$current\" != \"\$previous\" ]; then\n" .
-                "      printf '%%s master=%%s workers=[%%s]\\n' \"\$(date -u '+%%Y-%%m-%%dT%%H:%%M:%%SZ')\" \"\$server_pid\" \"\$current\" >> %s\n" .
-                "      previous=\"\$current\"\n" .
-                "    fi\n" .
-                "    if [ \"\$sample\" -eq 0 ]; then\n" .
-                "      printf '%s\\n' \"\$(date -u '+%Y-%m-%dT%H:%M:%SZ')\" >> %s\n" .
-                "      ps -o pid=,ppid=,pgid=,stat=,rss=,vsz=,pcpu=,pmem=,etime=,args= -p \"\$server_pid\" --ppid \"\$server_pid\" >> %s 2>&1 || true\n" .
-                "      sample=10\n" .
-                "    fi\n" .
-                "    sample=\$((sample - 1))\n" .
-                "    sleep 0.1\n" .
-                "  done\n" .
-                ") &\n" .
-                "monitor_pid=\$!\n",
-                escapeshellarg($serverPidFile),
-                escapeshellarg($workerMonitorFile),
-                escapeshellarg($processMonitorFile),
-                escapeshellarg($processMonitorFile)
-            );
-        }
+        $workerMonitor = sprintf(
+            "server_pid=\$(cat %s)\n" .
+            "(\n" .
+            "  previous=''\n" .
+            "  sample=0\n" .
+            "  while kill -0 \"\$server_pid\" 2>/dev/null; do\n" .
+            "    current=\$(ps -o pid=,stat= --ppid \"\$server_pid\" 2>/dev/null | awk '{printf \"%%s:%%s,\", \$1, \$2}' | sed 's/,$//')\n" .
+            "    if [ \"\$current\" != \"\$previous\" ]; then\n" .
+            "      printf '%%s master=%%s workers=[%%s]\\n' \"\$(date -u '+%%Y-%%m-%%dT%%H:%%M:%%SZ')\" \"\$server_pid\" \"\$current\" >> %s\n" .
+            "      previous=\"\$current\"\n" .
+            "    fi\n" .
+            "    if [ \"\$sample\" -eq 0 ]; then\n" .
+            "      printf '%s\\n' \"\$(date -u '+%Y-%m-%dT%H:%M:%SZ')\" >> %s\n" .
+            "      ps -o pid=,ppid=,pgid=,stat=,rss=,vsz=,pcpu=,pmem=,etime=,args= -p \"\$server_pid\" --ppid \"\$server_pid\" >> %s 2>&1 || true\n" .
+            "      sample=10\n" .
+            "    fi\n" .
+            "    sample=\$((sample - 1))\n" .
+            "    sleep 0.1\n" .
+            "  done\n" .
+            ") &\n" .
+            "monitor_pid=\$!\n",
+            escapeshellarg($serverPidFile),
+            escapeshellarg($workerMonitorFile),
+            escapeshellarg($processMonitorFile),
+            escapeshellarg($processMonitorFile)
+        );
 
         $script = $pathPrefix . sprintf(
             "echo wrapper-start > %s\n" .
