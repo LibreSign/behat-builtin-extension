@@ -439,12 +439,14 @@ final class RunServerListener implements EventSubscriberInterface
             return;
         }
 
+        $coredumpctl = [];
         exec('command -v coredumpctl', $coredumpctl, $coredumpctlExitCode);
         if ($coredumpctlExitCode !== 0 || !isset($coredumpctl[0])) {
             $this->writeDiagnostic('Core dump analysis unavailable: coredumpctl not found.');
             return;
         }
 
+        $gdb = [];
         exec('command -v gdb', $gdb, $gdbExitCode);
         $hasGdb = $gdbExitCode === 0 && isset($gdb[0]);
 
@@ -503,6 +505,7 @@ final class RunServerListener implements EventSubscriberInterface
     private function runCoreDumpCommand(string $command, int $timeoutSeconds = 5): array
     {
         $timeoutPrefix = '';
+        $timeout = [];
         exec('command -v timeout', $timeout, $timeoutExitCode);
         if ($timeoutExitCode === 0 && isset($timeout[0])) {
             $timeoutPrefix = sprintf('timeout %ds ', $timeoutSeconds);
