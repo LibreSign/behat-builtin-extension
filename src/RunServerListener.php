@@ -321,7 +321,7 @@ final class RunServerListener implements EventSubscriberInterface
             $this->pid = '0';
             $this->processGroupId = '0';
             $this->observedWorkerCount = 0;
-                if (!$this->unexpectedServerFailure) {
+            if (!$this->unexpectedServerFailure) {
                 $this->cleanupDiagnosticFiles();
             }
             return;
