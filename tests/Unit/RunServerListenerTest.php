@@ -236,6 +236,9 @@ final class RunServerListenerTest extends TestCase
         $this->assertStringContainsString('PHP modules', $messages);
         $this->assertStringContainsString('Process timeline:', $messages);
         $this->assertStringContainsString((string)$pid, $processTimelineBeforeCrash);
+        if (PHP_OS_FAMILY === 'Linux') {
+            $this->assertStringContainsString('Core dump ', $messages);
+        }
 
         $listener->stop();
 
@@ -290,6 +293,10 @@ final class RunServerListenerTest extends TestCase
         $this->assertStringContainsString('Worker timeline:', $messages);
         $this->assertStringContainsString(sprintf('%d:Z', $killedWorker), $messages);
         if (PHP_OS_FAMILY === 'Linux') {
+            $this->assertStringContainsString(
+                sprintf('Core dump unavailable pid=%d', $killedWorker),
+                $messages
+            );
             $this->assertStringContainsString(
                 sprintf('Worker termination pid=%d wait_status=9 signal=9 (SIGKILL) core_dumped=no', $killedWorker),
                 $messages
