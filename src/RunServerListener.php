@@ -30,6 +30,7 @@ final class RunServerListener implements EventSubscriberInterface
     private ?string $serverPidFile = null;
     private ?string $serverWrapperFile = null;
     private ?string $workerMonitorFile = null;
+    private ?string $processMonitorFile = null;
     private string $processGroupId = '0';
     private bool $unexpectedServerFailure = false;
     private int $observedWorkerCount = 0;
@@ -114,6 +115,7 @@ final class RunServerListener implements EventSubscriberInterface
         $this->reportExitStatus();
         $this->flushServerOutput();
         $this->flushWorkerMonitorOutput();
+        $this->flushProcessMonitorOutput();
 
         throw new ServerException(sprintf(
             'PHP built-in server became unhealthy during %s (pid=%s, process=%s, port=%s, workers=%d/%d).',
@@ -180,11 +182,13 @@ final class RunServerListener implements EventSubscriberInterface
             $serverExitFile = $this->serverExitFile;
             $serverWrapperFile = $this->serverWrapperFile;
             $workerMonitorFile = $this->workerMonitorFile;
+            $processMonitorFile = $this->processMonitorFile;
             if ($serverLogFile === null
                 || $serverPidFile === null
                 || $serverExitFile === null
                 || $serverWrapperFile === null
                 || $workerMonitorFile === null
+                || $processMonitorFile === null
             ) {
                 throw new ServerException('Unable to create temporary diagnostic files for PHP built-in server');
             }
@@ -194,7 +198,8 @@ final class RunServerListener implements EventSubscriberInterface
                 $serverPidFile,
                 $serverExitFile,
                 $serverWrapperFile,
-                $workerMonitorFile
+                $workerMonitorFile,
+                $processMonitorFile
             );
             $fullCmd = sprintf(
                 'nohup sh %s >>%s 2>&1 & echo $!',
@@ -326,6 +331,7 @@ final class RunServerListener implements EventSubscriberInterface
             $this->reportExitStatus();
             $this->flushServerOutput();
             $this->flushWorkerMonitorOutput();
+            $this->flushProcessMonitorOutput();
             $this->pid = '0';
             $this->processGroupId = '0';
             $this->observedWorkerCount = 0;
@@ -347,6 +353,7 @@ final class RunServerListener implements EventSubscriberInterface
             $this->reportExitStatus();
             $this->flushServerOutput();
             $this->flushWorkerMonitorOutput();
+            $this->flushProcessMonitorOutput();
         }
 
         $this->pid = '0';
@@ -392,6 +399,9 @@ final class RunServerListener implements EventSubscriberInterface
             'memory' => 'free -m 2>&1',
             'core limit' => 'sh -c "ulimit -c" 2>&1',
             'core pattern' => 'cat /proc/sys/kernel/core_pattern 2>&1',
+            'PHP version' => escapeshellarg(PHP_BINARY) . ' -v 2>&1',
+            'PHP configuration' => escapeshellarg(PHP_BINARY) . ' --ini 2>&1',
+            'PHP modules' => escapeshellarg(PHP_BINARY) . ' -m 2>&1',
         ];
 
         foreach ($commands as $label => $command) {
@@ -719,7 +729,7 @@ final class RunServerListener implements EventSubscriberInterface
     }
 
     /**
-     * @return array{log: ?string, exit: ?string, pid: ?string, wrapper: ?string, workers: ?string}
+     * @return array{log: ?string, exit: ?string, pid: ?string, wrapper: ?string, workers: ?string, processes: ?string}
      */
     public function getDiagnosticFiles(): array
     {
@@ -729,6 +739,7 @@ final class RunServerListener implements EventSubscriberInterface
             'pid' => $this->serverPidFile,
             'wrapper' => $this->serverWrapperFile,
             'workers' => $this->workerMonitorFile,
+            'processes' => $this->processMonitorFile,
         ];
     }
 
@@ -785,8 +796,9 @@ final class RunServerListener implements EventSubscriberInterface
         $this->serverPidFile = $base . '.pid';
         $this->serverWrapperFile = $base . '.sh';
         $this->workerMonitorFile = $base . '.workers.log';
+        $this->processMonitorFile = $base . '.processes.log';
         @unlink($base);
-        foreach ([$this->serverLogFile, $this->serverExitFile, $this->serverPidFile, $this->workerMonitorFile] as $file) {
+        foreach ([$this->serverLogFile, $this->serverExitFile, $this->serverPidFile, $this->workerMonitorFile, $this->processMonitorFile] as $file) {
             touch($file);
             @chmod($file, 0666);
         }
@@ -794,7 +806,7 @@ final class RunServerListener implements EventSubscriberInterface
 
     private function cleanupDiagnosticFiles(): void
     {
-        foreach ([$this->serverLogFile, $this->serverExitFile, $this->serverPidFile, $this->serverWrapperFile, $this->workerMonitorFile] as $file) {
+        foreach ([$this->serverLogFile, $this->serverExitFile, $this->serverPidFile, $this->serverWrapperFile, $this->workerMonitorFile, $this->processMonitorFile] as $file) {
             if (is_string($file) && is_file($file)) {
                 @unlink($file);
             }
@@ -804,6 +816,7 @@ final class RunServerListener implements EventSubscriberInterface
         $this->serverPidFile = null;
         $this->serverWrapperFile = null;
         $this->workerMonitorFile = null;
+        $this->processMonitorFile = null;
     }
 
     private function writeVerboseServerWrapper(
@@ -813,6 +826,7 @@ final class RunServerListener implements EventSubscriberInterface
         string $serverExitFile,
         string $wrapperFile,
         string $workerMonitorFile,
+        string $processMonitorFile,
     ): void {
         $pathPrefix = '';
         if (PHP_BINARY !== '' && is_file(PHP_BINARY)) {
@@ -825,18 +839,27 @@ final class RunServerListener implements EventSubscriberInterface
                 "server_pid=\$(cat %s)\n" .
                 "(\n" .
                 "  previous=''\n" .
+                "  sample=0\n" .
                 "  while kill -0 \"\$server_pid\" 2>/dev/null; do\n" .
                 "    current=\$(ps -o pid=,stat= --ppid \"\$server_pid\" 2>/dev/null | awk '{printf \"%%s:%%s,\", \$1, \$2}' | sed 's/,$//')\n" .
                 "    if [ \"\$current\" != \"\$previous\" ]; then\n" .
                 "      printf '%%s master=%%s workers=[%%s]\\n' \"\$(date -u '+%%Y-%%m-%%dT%%H:%%M:%%SZ')\" \"\$server_pid\" \"\$current\" >> %s\n" .
                 "      previous=\"\$current\"\n" .
                 "    fi\n" .
+                "    if [ \"\$sample\" -eq 0 ]; then\n" .
+                "      printf '%s\\n' \"\$(date -u '+%Y-%m-%dT%H:%M:%SZ')\" >> %s\n" .
+                "      ps -o pid=,ppid=,pgid=,stat=,rss=,vsz=,pcpu=,pmem=,etime=,args= -p \"\$server_pid\" --ppid \"\$server_pid\" >> %s 2>&1 || true\n" .
+                "      sample=10\n" .
+                "    fi\n" .
+                "    sample=\$((sample - 1))\n" .
                 "    sleep 0.1\n" .
                 "  done\n" .
                 ") &\n" .
                 "monitor_pid=\$!\n",
                 escapeshellarg($serverPidFile),
-                escapeshellarg($workerMonitorFile)
+                escapeshellarg($workerMonitorFile),
+                escapeshellarg($processMonitorFile),
+                escapeshellarg($processMonitorFile)
             );
         }
 
@@ -993,6 +1016,21 @@ final class RunServerListener implements EventSubscriberInterface
         }
 
         $this->writeDiagnostic("Worker timeline:\n" . rtrim($output));
+    }
+
+    private function flushProcessMonitorOutput(): void
+    {
+        if (!$this->isVerbose() || !is_string($this->processMonitorFile) || !is_file($this->processMonitorFile)) {
+            return;
+        }
+
+        $output = @file_get_contents($this->processMonitorFile);
+        if ($output === false || trim($output) === '') {
+            $this->writeDiagnostic('Process timeline: (empty)');
+            return;
+        }
+
+        $this->writeDiagnostic("Process timeline:\n" . rtrim($output));
     }
 
     private function writeDiagnostic(string $message): void
