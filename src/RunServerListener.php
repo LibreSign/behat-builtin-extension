@@ -111,8 +111,11 @@ final class RunServerListener implements EventSubscriberInterface
             $portReachable,
             $liveWorkerCount
         );
-        $this->waitForExitFile(40);
-        $this->reportExitStatus();
+        if (!$processAlive) {
+            $this->waitForExitFile(40);
+            $this->reportExitStatus();
+        }
+        $this->captureCoreDumpDiagnostics($processAlive);
         $this->flushServerOutput();
         $this->flushWorkerMonitorOutput();
         $this->flushProcessMonitorOutput();
@@ -416,6 +419,129 @@ final class RunServerListener implements EventSubscriberInterface
                 $output === [] ? '(empty)' : implode("\n", $output)
             ));
         }
+    }
+
+    private function captureCoreDumpDiagnostics(bool $processAlive): void
+    {
+        if (PHP_OS_FAMILY !== 'Linux') {
+            return;
+        }
+
+        $candidates = $processAlive ? [] : [$this->pid];
+        foreach ($this->collectDescendantPids($this->pid) as $workerPid) {
+            if ($this->isZombieProcess($workerPid)) {
+                $candidates[] = $workerPid;
+            }
+        }
+        $candidates = array_values(array_unique($candidates));
+
+        if ($candidates === []) {
+            return;
+        }
+
+        exec('command -v coredumpctl', $coredumpctl, $coredumpctlExitCode);
+        if ($coredumpctlExitCode !== 0 || !isset($coredumpctl[0])) {
+            $this->writeDiagnostic('Core dump analysis unavailable: coredumpctl not found.');
+            return;
+        }
+
+        exec('command -v gdb', $gdb, $gdbExitCode);
+        $hasGdb = $gdbExitCode === 0 && isset($gdb[0]);
+
+        foreach ($candidates as $pid) {
+            $metadata = $this->runCoreDumpCommand(sprintf(
+                'coredumpctl --no-pager --quiet info %s 2>&1',
+                escapeshellarg($pid)
+            ));
+
+            if ($metadata['exitCode'] !== 0) {
+                $this->writeDiagnostic(sprintf(
+                    "Core dump unavailable pid=%s (exit=%d):\n%s",
+                    $pid,
+                    $metadata['exitCode'],
+                    $metadata['output'] === '' ? '(no matching core dump)' : $metadata['output']
+                ));
+                continue;
+            }
+
+            $this->writeDiagnostic(sprintf(
+                "Core dump metadata pid=%s:\n%s",
+                $pid,
+                $metadata['output']
+            ));
+
+            if (!$hasGdb) {
+                $this->writeDiagnostic(sprintf(
+                    'Native backtrace unavailable pid=%s: gdb not found.',
+                    $pid
+                ));
+                continue;
+            }
+
+            $debuggerArguments = "-batch -ex 'set pagination off' "
+                . "-ex 'thread apply all bt full' "
+                . "-ex 'info registers' "
+                . "-ex 'info sharedlibrary'";
+            $backtrace = $this->runCoreDumpCommand(sprintf(
+                'coredumpctl --no-pager --quiet debug %s --debugger-arguments=%s 2>&1',
+                escapeshellarg($pid),
+                escapeshellarg($debuggerArguments)
+            ), 20);
+
+            $this->writeDiagnostic(sprintf(
+                "Native backtrace pid=%s (exit=%d):\n%s",
+                $pid,
+                $backtrace['exitCode'],
+                $backtrace['output'] === '' ? '(empty)' : $backtrace['output']
+            ));
+        }
+    }
+
+    /**
+     * @return array{exitCode: int, output: string}
+     */
+    private function runCoreDumpCommand(string $command, int $timeoutSeconds = 5): array
+    {
+        $timeoutPrefix = '';
+        exec('command -v timeout', $timeout, $timeoutExitCode);
+        if ($timeoutExitCode === 0 && isset($timeout[0])) {
+            $timeoutPrefix = sprintf('timeout %ds ', $timeoutSeconds);
+        }
+
+        $output = [];
+        exec($timeoutPrefix . $command, $output, $exitCode);
+        if ($exitCode !== 0) {
+            $sudoOutput = [];
+            exec('sudo -n true 2>/dev/null', $unused, $sudoAvailable);
+            if ($sudoAvailable === 0) {
+                exec($timeoutPrefix . 'sudo -n ' . $command, $sudoOutput, $sudoExitCode);
+                if ($sudoExitCode === 0) {
+                    return [
+                        'exitCode' => 0,
+                        'output' => implode("\n", $sudoOutput),
+                    ];
+                }
+            }
+        }
+
+        return [
+            'exitCode' => $exitCode,
+            'output' => implode("\n", $output),
+        ];
+    }
+
+    private function isZombieProcess(string $pid): bool
+    {
+        if ($pid === '' || $pid === '0' || !ctype_digit($pid)) {
+            return false;
+        }
+
+        $output = [];
+        exec(sprintf('ps -o stat= -p %s', $pid), $output, $exitCode);
+
+        return $exitCode === 0
+            && isset($output[0])
+            && str_starts_with(trim((string)$output[0]), 'Z');
     }
 
     private function captureZombieWorkerExitStatuses(): void
