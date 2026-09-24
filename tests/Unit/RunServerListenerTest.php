@@ -239,7 +239,7 @@ final class RunServerListenerTest extends TestCase
         }
     }
 
-    public function testWorkerTimelinePreservesKilledWorkerStateChange(): void
+    public function testWorkerTimelinePreservesKilledWorkerAndRecovery(): void
     {
         if (PHP_OS_FAMILY === 'Windows') {
             $this->markTestSkipped('Worker process handling is only asserted on Unix.');
@@ -254,22 +254,28 @@ final class RunServerListenerTest extends TestCase
         $this->assertNotNull($workerMonitorFile);
         $baselineTimeline = $this->waitForWorkerTimeline((string)$workerMonitorFile, 1);
 
-        $this->sendSignal($workerPids[0], 'KILL');
+        $killedWorker = $workerPids[0];
+        $this->sendSignal($killedWorker, 'KILL');
 
-        $timeline = $this->waitForWorkerTimelineChange(
+        $timelineWithFailure = $this->waitForWorkerTimelineContaining(
             (string)$workerMonitorFile,
-            $baselineTimeline
+            sprintf('%d:Z', $killedWorker)
         );
+        $recoveredWorkers = $this->waitForHealthyChildProcesses($mainPid, 2);
+
+        $listener->assertServerHealthy('after worker recovery');
 
         $this->assertTrue($listener->isRunning());
-        $this->assertStringContainsString(sprintf('master=%d', $mainPid), $timeline);
-        $this->assertStringContainsString('workers=[', $timeline);
-        $this->assertStringContainsString(sprintf('%d:', $workerPids[0]), $baselineTimeline);
-        $this->assertNotSame($baselineTimeline, $timeline);
+        $this->assertStringContainsString(sprintf('master=%d', $mainPid), $timelineWithFailure);
+        $this->assertStringContainsString(sprintf('%d:Z', $killedWorker), $timelineWithFailure);
+        $this->assertNotSame($baselineTimeline, $timelineWithFailure);
+        $this->assertCount(2, $recoveredWorkers);
+        $this->assertNotContains($killedWorker, $recoveredWorkers);
 
         $listener->stop();
         $messages = implode("\n", $listener->getDiagnosticMessages());
         $this->assertStringContainsString('Worker timeline:', $messages);
+        $this->assertStringContainsString(sprintf('%d:Z', $killedWorker), $messages);
     }
 
     public function testVerboseWrapperEnablesCoreDumpsBestEffort(): void
@@ -308,6 +314,52 @@ final class RunServerListenerTest extends TestCase
         }
 
         $this->fail(sprintf('Expected worker timeline in %s', $path));
+    }
+
+    private function waitForWorkerTimelineContaining(string $path, string $needle): string
+    {
+        for ($i = 0; $i < 40; $i++) {
+            $content = is_file($path) ? trim((string)file_get_contents($path)) : '';
+            if ($content !== '' && str_contains($content, $needle)) {
+                return $content;
+            }
+            usleep(50000);
+        }
+
+        $this->fail(sprintf('Expected worker timeline in %s to contain %s', $path, $needle));
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function waitForHealthyChildProcesses(int $parentPid, int $minimumCount): array
+    {
+        for ($i = 0; $i < 40; $i++) {
+            $output = [];
+            exec(sprintf('ps -o pid=,stat= --ppid %d', $parentPid), $output, $exitCode);
+            if ($exitCode === 0) {
+                $pids = [];
+                foreach ($output as $line) {
+                    if (preg_match('/^\s*(\d+)\s+(\S+)/', $line, $matches) !== 1) {
+                        continue;
+                    }
+                    if (str_starts_with($matches[2], 'Z')) {
+                        continue;
+                    }
+                    $pids[] = (int)$matches[1];
+                }
+                if (count($pids) >= $minimumCount) {
+                    return array_slice($pids, 0, $minimumCount);
+                }
+            }
+            usleep(50000);
+        }
+
+        $this->fail(sprintf(
+            'Expected at least %d healthy child worker process(es) for pid %d',
+            $minimumCount,
+            $parentPid
+        ));
     }
 
     private function waitForWorkerTimelineChange(string $path, string $baseline): string
