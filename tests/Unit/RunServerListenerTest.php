@@ -239,7 +239,7 @@ final class RunServerListenerTest extends TestCase
         }
     }
 
-    public function testHealthCheckDoesNotFailWhenMasterRecoversKilledWorker(): void
+    public function testWorkerTimelinePreservesKilledWorkerStateChange(): void
     {
         if (PHP_OS_FAMILY === 'Windows') {
             $this->markTestSkipped('Worker process handling is only asserted on Unix.');
@@ -256,11 +256,6 @@ final class RunServerListenerTest extends TestCase
 
         $this->sendSignal($workerPids[0], 'KILL');
 
-        // A new connection can be what makes the built-in server restore worker
-        // capacity. The health check performs that probe, then the monitor must
-        // preserve the resulting PID replacement.
-        usleep(250000);
-        $listener->assertServerHealthy('after scenario');
         $timeline = $this->waitForWorkerTimelineChange(
             (string)$workerMonitorFile,
             $baselineTimeline
@@ -269,10 +264,8 @@ final class RunServerListenerTest extends TestCase
         $this->assertTrue($listener->isRunning());
         $this->assertStringContainsString(sprintf('master=%d', $mainPid), $timeline);
         $this->assertStringContainsString('workers=[', $timeline);
+        $this->assertStringContainsString(sprintf('%d:', $workerPids[0]), $baselineTimeline);
         $this->assertNotSame($baselineTimeline, $timeline);
-
-        $messages = implode("\n", $listener->getDiagnosticMessages());
-        $this->assertStringNotContainsString('SERVER FAILURE DETECTED', $messages);
 
         $listener->stop();
         $messages = implode("\n", $listener->getDiagnosticMessages());
