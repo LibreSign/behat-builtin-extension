@@ -256,14 +256,15 @@ final class RunServerListenerTest extends TestCase
 
         $this->sendSignal($workerPids[0], 'KILL');
 
-        // PHP's built-in server master may replace a killed worker immediately.
-        // The monitor must preserve that replacement even when the health check
-        // sees a fully recovered pool.
+        // A new connection can be what makes the built-in server restore worker
+        // capacity. The health check performs that probe, then the monitor must
+        // preserve the resulting PID replacement.
+        usleep(250000);
+        $listener->assertServerHealthy('after scenario');
         $timeline = $this->waitForWorkerTimelineChange(
             (string)$workerMonitorFile,
             $baselineTimeline
         );
-        $listener->assertServerHealthy('after scenario');
 
         $this->assertTrue($listener->isRunning());
         $this->assertStringContainsString(sprintf('master=%d', $mainPid), $timeline);
