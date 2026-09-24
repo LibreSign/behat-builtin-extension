@@ -38,7 +38,7 @@ final class RunServerListenerTest extends TestCase
 
         $messages = implode("\n", $listener->getDiagnosticMessages());
         $this->assertMatchesRegularExpression(
-            '/Started PHP built-in server pid=\d+ host=127\.0\.0\.1 port=\d+ workers=2 log=.+/',
+            '/Started PHP built-in server pid=\d+ host=127\.0\.0\.1 port=\d+ workers=2 observed_workers=\d+ log=.+/',
             $messages
         );
         $this->assertTrue($listener->isRunning());
@@ -187,6 +187,111 @@ final class RunServerListenerTest extends TestCase
             );
             $this->assertFalse($listener->isRunning());
         }
+    }
+
+    public function testHealthCheckPassesWhileServerIsRunning(): void
+    {
+        $listener = new RunServerListener(0, $this->docRoot, '127.0.0.1', '', 2);
+        $listener->start();
+
+        $listener->assertServerHealthy('unit test');
+
+        $this->assertTrue($listener->isRunning());
+        $listener->stop();
+    }
+
+    public function testHealthCheckDetectsUnexpectedMainProcessTerminationAndPreservesDiagnostics(): void
+    {
+        if (PHP_OS_FAMILY === 'Windows') {
+            $this->markTestSkipped('Signal-based termination is only asserted on Unix.');
+        }
+
+        $listener = new RunServerListener(0, $this->docRoot, '127.0.0.1', '', 0);
+        $listener->start();
+        $pid = $this->extractPidFromDiagnostics($listener->getDiagnosticMessages());
+        $diagnosticFiles = $listener->getDiagnosticFiles();
+
+        $this->sendSignal($pid, 'SEGV');
+        $this->waitUntilGone($listener);
+
+        try {
+            $listener->assertServerHealthy('after scenario');
+            $this->fail('Expected health check to detect the terminated PHP server.');
+        } catch (\PhpBuiltin\Exception\ServerException $exception) {
+            $this->assertStringContainsString('became unhealthy', $exception->getMessage());
+        }
+
+        $messages = implode("\n", $listener->getDiagnosticMessages());
+        $this->assertStringContainsString('SERVER FAILURE DETECTED', $messages);
+        $this->assertStringContainsString('process=gone', $messages);
+        $this->assertStringContainsString('Server process exit status: 139 (possibly SIGSEGV)', $messages);
+        $this->assertStringContainsString('server process group', $messages);
+        $this->assertStringContainsString('memory', $messages);
+        $this->assertStringContainsString('core pattern', $messages);
+
+        $listener->stop();
+
+        foreach ($diagnosticFiles as $path) {
+            if ($path !== null) {
+                $this->assertFileExists($path, 'Unexpected failures should preserve diagnostic files.');
+                @unlink($path);
+            }
+        }
+    }
+
+    public function testHealthCheckDetectsWorkerLossEvenWhileServerStillListens(): void
+    {
+        if (PHP_OS_FAMILY === 'Windows') {
+            $this->markTestSkipped('Worker process handling is only asserted on Unix.');
+        }
+
+        $listener = new RunServerListener(0, $this->docRoot, '127.0.0.1', '', 2);
+        $listener->start();
+        $mainPid = $this->extractPidFromDiagnostics($listener->getDiagnosticMessages());
+        $workerPids = $this->waitForChildProcesses($mainPid, 2);
+        $diagnosticFiles = $listener->getDiagnosticFiles();
+
+        $this->sendSignal($workerPids[0], 'KILL');
+
+        $detected = false;
+        for ($i = 0; $i < 20; $i++) {
+            try {
+                $listener->assertServerHealthy('after scenario');
+            } catch (\PhpBuiltin\Exception\ServerException $exception) {
+                $detected = true;
+                $this->assertStringContainsString('workers=', $exception->getMessage());
+                break;
+            }
+            usleep(50000);
+        }
+
+        $this->assertTrue($detected, 'Expected health check to detect a lost PHP worker.');
+
+        $messages = implode("\n", $listener->getDiagnosticMessages());
+        $this->assertStringContainsString('SERVER FAILURE DETECTED', $messages);
+        $this->assertStringContainsString('process=alive', $messages);
+        $this->assertStringContainsString('port=reachable', $messages);
+
+        $listener->stop();
+        foreach ($diagnosticFiles as $path) {
+            if ($path !== null) {
+                @unlink($path);
+            }
+        }
+    }
+
+    public function testVerboseWrapperEnablesCoreDumpsBestEffort(): void
+    {
+        $listener = new RunServerListener(0, $this->docRoot, '127.0.0.1', '', 0);
+        $listener->start();
+
+        $files = $listener->getDiagnosticFiles();
+        $this->assertNotNull($files['wrapper']);
+        $wrapper = file_get_contents((string)$files['wrapper']);
+        $this->assertIsString($wrapper);
+        $this->assertStringContainsString('ulimit -c unlimited', $wrapper);
+
+        $listener->stop();
     }
 
     public function testNonVerboseStopDoesNotEmitDiagnostics(): void
