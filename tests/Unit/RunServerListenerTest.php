@@ -247,7 +247,7 @@ final class RunServerListenerTest extends TestCase
         }
     }
 
-    public function testWorkerTimelinePreservesKilledWorkerAndRecovery(): void
+    public function testWorkerLossIsDetectedAndPreservedInDiagnostics(): void
     {
         if (PHP_OS_FAMILY === 'Windows') {
             $this->markTestSkipped('Worker process handling is only asserted on Unix.');
@@ -269,21 +269,34 @@ final class RunServerListenerTest extends TestCase
             (string)$workerMonitorFile,
             sprintf('%d:Z', $killedWorker)
         );
-        $recoveredWorkers = $this->waitForHealthyChildProcesses($mainPid, 2);
 
-        $listener->assertServerHealthy('after worker recovery');
+        try {
+            $listener->assertServerHealthy('after worker death');
+            $this->fail('Expected health check to detect degraded PHP worker capacity.');
+        } catch (\PhpBuiltin\Exception\ServerException $exception) {
+            $this->assertStringContainsString('workers=1/2', $exception->getMessage());
+        }
 
         $this->assertTrue($listener->isRunning());
         $this->assertStringContainsString(sprintf('master=%d', $mainPid), $timelineWithFailure);
         $this->assertStringContainsString(sprintf('%d:Z', $killedWorker), $timelineWithFailure);
         $this->assertNotSame($baselineTimeline, $timelineWithFailure);
-        $this->assertCount(2, $recoveredWorkers);
-        $this->assertNotContains($killedWorker, $recoveredWorkers);
 
-        $listener->stop();
         $messages = implode("\n", $listener->getDiagnosticMessages());
+        $this->assertStringContainsString('SERVER FAILURE DETECTED', $messages);
+        $this->assertStringContainsString('process=alive', $messages);
+        $this->assertStringContainsString('port=reachable', $messages);
+        $this->assertStringContainsString('workers=1/2', $messages);
         $this->assertStringContainsString('Worker timeline:', $messages);
         $this->assertStringContainsString(sprintf('%d:Z', $killedWorker), $messages);
+
+        $listener->stop();
+
+        foreach ($diagnosticFiles as $path) {
+            if ($path !== null) {
+                @unlink($path);
+            }
+        }
     }
 
     public function testVerboseWrapperEnablesCoreDumpsBestEffort(): void
@@ -348,52 +361,6 @@ final class RunServerListenerTest extends TestCase
         }
 
         $this->fail(sprintf('Expected worker timeline in %s to contain %s', $path, $needle));
-    }
-
-    /**
-     * @return list<int>
-     */
-    private function waitForHealthyChildProcesses(int $parentPid, int $minimumCount): array
-    {
-        for ($i = 0; $i < 40; $i++) {
-            $output = [];
-            exec(sprintf('ps -o pid=,stat= --ppid %d', $parentPid), $output, $exitCode);
-            if ($exitCode === 0) {
-                $pids = [];
-                foreach ($output as $line) {
-                    if (preg_match('/^\s*(\d+)\s+(\S+)/', $line, $matches) !== 1) {
-                        continue;
-                    }
-                    if (str_starts_with($matches[2], 'Z')) {
-                        continue;
-                    }
-                    $pids[] = (int)$matches[1];
-                }
-                if (count($pids) >= $minimumCount) {
-                    return array_slice($pids, 0, $minimumCount);
-                }
-            }
-            usleep(50000);
-        }
-
-        $this->fail(sprintf(
-            'Expected at least %d healthy child worker process(es) for pid %d',
-            $minimumCount,
-            $parentPid
-        ));
-    }
-
-    private function waitForWorkerTimelineChange(string $path, string $baseline): string
-    {
-        for ($i = 0; $i < 40; $i++) {
-            $content = is_file($path) ? trim((string)file_get_contents($path)) : '';
-            if ($content !== '' && $content !== $baseline) {
-                return $content;
-            }
-            usleep(50000);
-        }
-
-        $this->fail(sprintf('Expected worker timeline to change in %s', $path));
     }
 
     private function waitForChildProcesses(int $parentPid, int $minimumCount): array
