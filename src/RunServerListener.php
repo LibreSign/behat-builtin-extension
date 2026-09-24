@@ -94,7 +94,9 @@ final class RunServerListener implements EventSubscriberInterface
         $liveWorkerCount = $processAlive && $this->workers > 0
             ? count($this->collectDescendantPids($this->pid))
             : 0;
-        $workersHealthy = $this->observedWorkerCount === 0 || $liveWorkerCount >= $this->observedWorkerCount;
+        $workersHealthy = !$this->isVerbose()
+            || $this->observedWorkerCount === 0
+            || $liveWorkerCount >= $this->observedWorkerCount;
 
         if ($processAlive && $portReachable && $workersHealthy) {
             return;
