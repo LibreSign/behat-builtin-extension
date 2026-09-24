@@ -249,19 +249,33 @@ final class RunServerListenerTest extends TestCase
         $listener->start();
         $mainPid = $this->extractPidFromDiagnostics($listener->getDiagnosticMessages());
         $workerPids = $this->waitForChildProcesses($mainPid, 2);
+        $diagnosticFiles = $listener->getDiagnosticFiles();
+        $workerMonitorFile = $diagnosticFiles['workers'];
+        $this->assertNotNull($workerMonitorFile);
+        $baselineTimeline = $this->waitForWorkerTimeline((string)$workerMonitorFile, 1);
 
         $this->sendSignal($workerPids[0], 'KILL');
 
         // PHP's built-in server master may replace a killed worker immediately.
-        // Give it a short window to restore the pool before checking health.
-        usleep(250000);
+        // The monitor must preserve that replacement even when the health check
+        // sees a fully recovered pool.
+        $timeline = $this->waitForWorkerTimelineChange(
+            (string)$workerMonitorFile,
+            $baselineTimeline
+        );
         $listener->assertServerHealthy('after scenario');
 
         $this->assertTrue($listener->isRunning());
+        $this->assertStringContainsString(sprintf('master=%d', $mainPid), $timeline);
+        $this->assertStringContainsString('workers=[', $timeline);
+        $this->assertNotSame($baselineTimeline, $timeline);
+
         $messages = implode("\n", $listener->getDiagnosticMessages());
         $this->assertStringNotContainsString('SERVER FAILURE DETECTED', $messages);
 
         $listener->stop();
+        $messages = implode("\n", $listener->getDiagnosticMessages());
+        $this->assertStringContainsString('Worker timeline:', $messages);
     }
 
     public function testVerboseWrapperEnablesCoreDumpsBestEffort(): void
@@ -287,6 +301,32 @@ final class RunServerListenerTest extends TestCase
 
         $this->assertSame([], $listener->getDiagnosticMessages());
         $this->assertFalse($listener->isRunning());
+    }
+
+    private function waitForWorkerTimeline(string $path, int $minimumLines): string
+    {
+        for ($i = 0; $i < 40; $i++) {
+            $content = is_file($path) ? trim((string)file_get_contents($path)) : '';
+            if ($content !== '' && count(explode("\n", $content)) >= $minimumLines) {
+                return $content;
+            }
+            usleep(50000);
+        }
+
+        $this->fail(sprintf('Expected worker timeline in %s', $path));
+    }
+
+    private function waitForWorkerTimelineChange(string $path, string $baseline): string
+    {
+        for ($i = 0; $i < 40; $i++) {
+            $content = is_file($path) ? trim((string)file_get_contents($path)) : '';
+            if ($content !== '' && $content !== $baseline) {
+                return $content;
+            }
+            usleep(50000);
+        }
+
+        $this->fail(sprintf('Expected worker timeline to change in %s', $path));
     }
 
     private function waitForChildProcesses(int $parentPid, int $minimumCount): array
