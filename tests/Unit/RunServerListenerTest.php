@@ -239,7 +239,7 @@ final class RunServerListenerTest extends TestCase
         }
     }
 
-    public function testHealthCheckDetectsWorkerLossEvenWhileServerStillListens(): void
+    public function testHealthCheckRecordsWorkerReplacementWithoutFailingHealthyServer(): void
     {
         if (PHP_OS_FAMILY === 'Windows') {
             $this->markTestSkipped('Worker process handling is only asserted on Unix.');
@@ -249,35 +249,28 @@ final class RunServerListenerTest extends TestCase
         $listener->start();
         $mainPid = $this->extractPidFromDiagnostics($listener->getDiagnosticMessages());
         $workerPids = $this->waitForChildProcesses($mainPid, 2);
-        $diagnosticFiles = $listener->getDiagnosticFiles();
 
         $this->sendSignal($workerPids[0], 'KILL');
 
-        $detected = false;
-        for ($i = 0; $i < 20; $i++) {
-            try {
-                $listener->assertServerHealthy('after scenario');
-            } catch (\PhpBuiltin\Exception\ServerException $exception) {
-                $detected = true;
-                $this->assertStringContainsString('workers=', $exception->getMessage());
+        $recorded = false;
+        for ($i = 0; $i < 40; $i++) {
+            $listener->assertServerHealthy('after scenario');
+            $messages = implode("\n", $listener->getDiagnosticMessages());
+            if (str_contains($messages, 'PHP worker pool changed:')) {
+                $recorded = true;
                 break;
             }
             usleep(50000);
         }
 
-        $this->assertTrue($detected, 'Expected health check to detect a lost PHP worker.');
+        $this->assertTrue($recorded, 'Expected worker replacement to be recorded in verbose diagnostics.');
+        $this->assertTrue($listener->isRunning());
 
         $messages = implode("\n", $listener->getDiagnosticMessages());
-        $this->assertStringContainsString('SERVER FAILURE DETECTED', $messages);
-        $this->assertStringContainsString('process=alive', $messages);
-        $this->assertStringContainsString('port=reachable', $messages);
+        $this->assertStringContainsString('The master may have replaced a worker.', $messages);
+        $this->assertStringNotContainsString('SERVER FAILURE DETECTED', $messages);
 
         $listener->stop();
-        foreach ($diagnosticFiles as $path) {
-            if ($path !== null) {
-                @unlink($path);
-            }
-        }
     }
 
     public function testVerboseWrapperEnablesCoreDumpsBestEffort(): void
