@@ -826,7 +826,7 @@ final class RunServerListener implements EventSubscriberInterface
                 "(\n" .
                 "  previous=''\n" .
                 "  while kill -0 \"\$server_pid\" 2>/dev/null; do\n" .
-                "    current=\$(ps -o pid=,stat= --ppid \"\$server_pid\" 2>/dev/null | awk '{printf \"%s:%s,\", \$1, \$2}' | sed 's/,$//')\n" .
+                "    current=\$(ps -o pid=,stat= --ppid \"\$server_pid\" 2>/dev/null | awk '{printf \"%%s:%%s,\", \$1, \$2}' | sed 's/,$//')\n" .
                 "    if [ \"\$current\" != \"\$previous\" ]; then\n" .
                 "      printf '%%s master=%%s workers=[%%s]\\n' \"\$(date -u '+%%Y-%%m-%%dT%%H:%%M:%%SZ')\" \"\$server_pid\" \"\$current\" >> %s\n" .
                 "      previous=\"\$current\"\n" .
