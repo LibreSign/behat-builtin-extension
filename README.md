@@ -84,27 +84,3 @@ class FeatureContext implements Context
     }
 }
 ```
-
-
-## Diagnosing unexpected server failures
-
-The extension checks the PHP built-in server before and after each Behat scenario.
-If the server process or listener disappears, the run fails with a server infrastructure
-error instead of allowing later scenarios to fail with unrelated connection errors.
-
-When verbose mode is enabled (for example with `BEHAT_VERBOSE=1` or Behat `-v`),
-the extension additionally:
-
-- records the process group, listener state, memory state, core dump limit and core pattern;
-- tracks the PHP worker pool over time and preserves PID replacements/restarts in a worker timeline;
-- captures the PHP server exit status and stdout/stderr;
-- enables core dumps on a best-effort basis with `ulimit -c unlimited`;
-- preserves the server log, exit status, PID, wrapper and worker timeline files after an unexpected server failure.
-
-The extension deliberately does not restart a crashed server automatically. A request may
-have changed application state before PHP terminated, and continuing the suite with a new
-server could hide the original failure or make following scenarios unreliable.
-
-Normal non-verbose runs do not perform worker-count supervision or emit the additional
-diagnostic output. Worker timeline entries are diagnostic evidence of process replacement;
-they are not treated as failures when the master restores the configured worker capacity.
