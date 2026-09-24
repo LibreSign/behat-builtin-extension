@@ -390,6 +390,8 @@ final class RunServerListener implements EventSubscriberInterface
             $this->observedWorkerCount
         ));
 
+        $this->captureZombieWorkerExitStatuses();
+
         $commands = [
             'server process group' => sprintf(
                 'ps -o pid,ppid,pgid,sid,user,stat,etime,rss,vsz,pcpu,pmem,args --forest -g %s 2>&1',
@@ -414,6 +416,70 @@ final class RunServerListener implements EventSubscriberInterface
                 $output === [] ? '(empty)' : implode("\n", $output)
             ));
         }
+    }
+
+    private function captureZombieWorkerExitStatuses(): void
+    {
+        if (PHP_OS_FAMILY !== 'Linux') {
+            return;
+        }
+
+        foreach ($this->collectDescendantPids($this->pid) as $workerPid) {
+            $statFile = '/proc/' . $workerPid . '/stat';
+            if (!is_file($statFile)) {
+                continue;
+            }
+
+            $stat = @file_get_contents($statFile);
+            if (!is_string($stat) || $stat === '') {
+                continue;
+            }
+
+            $commandEnd = strrpos($stat, ') ');
+            if ($commandEnd === false) {
+                continue;
+            }
+
+            $fields = preg_split('/\s+/', substr($stat, $commandEnd + 2));
+            if (!is_array($fields) || count($fields) < 50 || $fields[0] !== 'Z') {
+                continue;
+            }
+
+            $waitStatus = (int)$fields[49];
+            $signal = $waitStatus & 0x7f;
+            $coreDumped = ($waitStatus & 0x80) !== 0;
+
+            if ($signal > 0 && $signal !== 0x7f) {
+                $this->writeDiagnostic(sprintf(
+                    'Worker termination pid=%s wait_status=%d signal=%d%s core_dumped=%s',
+                    $workerPid,
+                    $waitStatus,
+                    $signal,
+                    $this->signalName($signal),
+                    $coreDumped ? 'yes' : 'no'
+                ));
+                continue;
+            }
+
+            $this->writeDiagnostic(sprintf(
+                'Worker termination pid=%s wait_status=%d exit_code=%d',
+                $workerPid,
+                $waitStatus,
+                ($waitStatus >> 8) & 0xff
+            ));
+        }
+    }
+
+    private function signalName(int $signal): string
+    {
+        $names = [
+            6 => 'SIGABRT',
+            9 => 'SIGKILL',
+            11 => 'SIGSEGV',
+            15 => 'SIGTERM',
+        ];
+
+        return isset($names[$signal]) ? ' (' . $names[$signal] . ')' : '';
     }
 
     /**
