@@ -93,7 +93,7 @@ final class RunServerListener implements EventSubscriberInterface
         $processAlive = $this->isRunning();
         $portReachable = $this->isServerPortInUse();
         $liveWorkerCount = $processAlive && $this->workers > 0
-            ? count($this->collectDescendantPids($this->pid))
+            ? count($this->collectActiveDescendantPids($this->pid))
             : 0;
         $workersHealthy = !$this->isVerbose()
             || $this->observedWorkerCount === 0
@@ -251,7 +251,7 @@ final class RunServerListener implements EventSubscriberInterface
 
         if ($this->workers > 0) {
             for ($i = 0; $i < 20; $i++) {
-                $this->observedWorkerCount = count($this->collectDescendantPids($this->pid));
+                $this->observedWorkerCount = count($this->collectActiveDescendantPids($this->pid));
                 if ($this->observedWorkerCount >= $this->workers) {
                     break;
                 }
@@ -306,9 +306,7 @@ final class RunServerListener implements EventSubscriberInterface
             return false;
         }
 
-        exec(sprintf('ps %d', $this->pid), $result);
-
-        return count($result) > 1;
+        return $this->isProcessAlive($this->pid);
     }
 
     /**
@@ -553,6 +551,17 @@ final class RunServerListener implements EventSubscriberInterface
         }
 
         return array_keys($found);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function collectActiveDescendantPids(string $rootPid): array
+    {
+        return array_values(array_filter(
+            $this->collectDescendantPids($rootPid),
+            fn (string $pid): bool => $this->isProcessAlive($pid)
+        ));
     }
 
     /**
@@ -817,7 +826,7 @@ final class RunServerListener implements EventSubscriberInterface
                 "(\n" .
                 "  previous=''\n" .
                 "  while kill -0 \"\$server_pid\" 2>/dev/null; do\n" .
-                "    current=\$(pgrep -P \"\$server_pid\" 2>/dev/null | sort -n | tr '\\n' ',' | sed 's/,$//')\n" .
+                "    current=\$(ps -o pid=,stat= --ppid \"\$server_pid\" 2>/dev/null | awk '{printf \"%s:%s,\", \$1, \$2}' | sed 's/,$//')\n" .
                 "    if [ \"\$current\" != \"\$previous\" ]; then\n" .
                 "      printf '%%s master=%%s workers=[%%s]\\n' \"\$(date -u '+%%Y-%%m-%%dT%%H:%%M:%%SZ')\" \"\$server_pid\" \"\$current\" >> %s\n" .
                 "      previous=\"\$current\"\n" .
@@ -889,8 +898,16 @@ final class RunServerListener implements EventSubscriberInterface
         if ($pid === '' || $pid === '0') {
             return false;
         }
-        exec(sprintf('ps %d', $pid), $result);
-        return count($result) > 1;
+
+        $output = [];
+        exec(sprintf('ps -o stat= -p %s', $pid), $output, $exitCode);
+        if ($exitCode !== 0 || !isset($output[0])) {
+            return false;
+        }
+
+        $state = trim((string)$output[0]);
+
+        return $state !== '' && !str_starts_with($state, 'Z');
     }
 
     private function reportExitStatus(): void
