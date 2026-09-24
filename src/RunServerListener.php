@@ -33,8 +33,6 @@ final class RunServerListener implements EventSubscriberInterface
     private bool $unexpectedServerFailure = false;
     private int $observedWorkerCount = 0;
     /** @var list<string> */
-    private array $observedWorkerPids = [];
-    /** @var list<string> */
     private array $diagnosticMessages = [];
 
     public function __construct(?int $verbose, string $rootDir, string $host, string $runAs, int $workers)
@@ -93,26 +91,12 @@ final class RunServerListener implements EventSubscriberInterface
 
         $processAlive = $this->isRunning();
         $portReachable = $this->isServerPortInUse();
-        $liveWorkerPids = $processAlive && $this->workers > 0
-            ? $this->collectDescendantPids($this->pid)
-            : [];
-        $liveWorkerCount = count($liveWorkerPids);
+        $liveWorkerCount = $processAlive && $this->workers > 0
+            ? count($this->collectDescendantPids($this->pid))
+            : 0;
         $workersHealthy = !$this->isVerbose()
             || $this->observedWorkerCount === 0
             || $liveWorkerCount >= $this->observedWorkerCount;
-
-        if ($this->isVerbose()
-            && $workersHealthy
-            && $this->observedWorkerPids !== []
-            && $liveWorkerPids !== $this->observedWorkerPids
-        ) {
-            $this->writeDiagnostic(sprintf(
-                'PHP worker pool changed: previous=[%s] current=[%s]. The master may have replaced a worker.',
-                implode(',', $this->observedWorkerPids),
-                implode(',', $liveWorkerPids)
-            ));
-            $this->observedWorkerPids = $liveWorkerPids;
-        }
 
         if ($processAlive && $portReachable && $workersHealthy) {
             return;
@@ -144,7 +128,6 @@ final class RunServerListener implements EventSubscriberInterface
     {
         $this->unexpectedServerFailure = false;
         $this->observedWorkerCount = 0;
-        $this->observedWorkerPids = [];
         $this->killZombies();
         if ($this->isRunning()) {
             return;
@@ -259,8 +242,7 @@ final class RunServerListener implements EventSubscriberInterface
 
         if ($this->workers > 0) {
             for ($i = 0; $i < 20; $i++) {
-                $this->observedWorkerPids = $this->collectDescendantPids($this->pid);
-                $this->observedWorkerCount = count($this->observedWorkerPids);
+                $this->observedWorkerCount = count($this->collectDescendantPids($this->pid));
                 if ($this->observedWorkerCount >= $this->workers) {
                     break;
                 }
@@ -339,8 +321,7 @@ final class RunServerListener implements EventSubscriberInterface
             $this->pid = '0';
             $this->processGroupId = '0';
             $this->observedWorkerCount = 0;
-            $this->observedWorkerPids = [];
-            if (!$this->unexpectedServerFailure) {
+                if (!$this->unexpectedServerFailure) {
                 $this->cleanupDiagnosticFiles();
             }
             return;
@@ -362,7 +343,6 @@ final class RunServerListener implements EventSubscriberInterface
         $this->pid = '0';
         $this->processGroupId = '0';
         $this->observedWorkerCount = 0;
-        $this->observedWorkerPids = [];
         if (!$this->unexpectedServerFailure) {
             $this->cleanupDiagnosticFiles();
         }
