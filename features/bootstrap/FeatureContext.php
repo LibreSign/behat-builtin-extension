@@ -57,6 +57,48 @@ class FeatureContext implements Context
     }
 
     /**
+     * @When kill server unexpectedly with :signal
+     */
+    public function killServerUnexpectedlyWith(string $signal): void
+    {
+        if (preg_match('/^[A-Z0-9]+$/', $signal) !== 1) {
+            throw new \RuntimeException('Invalid signal name');
+        }
+
+        $pid = null;
+        foreach ($this->server->getDiagnosticMessages() as $message) {
+            if (preg_match('/Started PHP built-in server pid=(\d+)/', $message, $matches) === 1) {
+                $pid = (int)$matches[1];
+            }
+        }
+        if ($pid === null) {
+            throw new \RuntimeException('PHP built-in server PID not found in diagnostics');
+        }
+
+        exec(sprintf('kill -s %s %d', $signal, $pid), $output, $exitCode);
+        if ($exitCode !== 0) {
+            throw new \RuntimeException(sprintf('Failed to send SIG%s to pid %d', $signal, $pid));
+        }
+
+        for ($i = 0; $i < 40; $i++) {
+            if (!$this->server->isRunning()) {
+                return;
+            }
+            usleep(50000);
+        }
+
+        throw new \RuntimeException(sprintf('Server pid %d did not terminate', $pid));
+    }
+
+    /**
+     * @Then diagnostic marker after crash is executed
+     */
+    public function diagnosticMarkerAfterCrashIsExecuted(): void
+    {
+        throw new \RuntimeException('SCENARIO_AFTER_CRASH_EXECUTED');
+    }
+
+    /**
      * @When kill all instances
      */
     public function killAllInstances()
