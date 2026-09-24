@@ -289,6 +289,12 @@ final class RunServerListenerTest extends TestCase
         $this->assertStringContainsString('workers=1/2', $messages);
         $this->assertStringContainsString('Worker timeline:', $messages);
         $this->assertStringContainsString(sprintf('%d:Z', $killedWorker), $messages);
+        if (PHP_OS_FAMILY === 'Linux') {
+            $this->assertStringContainsString(
+                sprintf('Worker termination pid=%d wait_status=9 signal=9 (SIGKILL) core_dumped=no', $killedWorker),
+                $messages
+            );
+        }
 
         $listener->stop();
 
