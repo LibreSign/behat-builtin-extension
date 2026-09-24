@@ -1,3 +1,10 @@
 default:
+  gherkin:
+    filters:
+      tags: "~@diagnostic-crash"
   extensions:
-      PhpBuiltin\Server: ~
+    PhpBuiltin\Server: ~
+
+diagnostic:
+  extensions:
+    PhpBuiltin\Server: ~
