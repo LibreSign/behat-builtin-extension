@@ -210,6 +210,9 @@ final class RunServerListenerTest extends TestCase
         $listener->start();
         $pid = $this->extractPidFromDiagnostics($listener->getDiagnosticMessages());
         $diagnosticFiles = $listener->getDiagnosticFiles();
+        $processMonitorFile = $diagnosticFiles['processes'];
+        $this->assertNotNull($processMonitorFile);
+        $processTimelineBeforeCrash = $this->waitForProcessTimeline((string)$processMonitorFile);
 
         $this->sendSignal($pid, 'SEGV');
         $this->waitUntilGone($listener);
@@ -228,6 +231,11 @@ final class RunServerListenerTest extends TestCase
         $this->assertStringContainsString('server process group', $messages);
         $this->assertStringContainsString('memory', $messages);
         $this->assertStringContainsString('core pattern', $messages);
+        $this->assertStringContainsString('PHP version', $messages);
+        $this->assertStringContainsString('PHP configuration', $messages);
+        $this->assertStringContainsString('PHP modules', $messages);
+        $this->assertStringContainsString('Process timeline:', $messages);
+        $this->assertStringContainsString((string)$pid, $processTimelineBeforeCrash);
 
         $listener->stop();
 
@@ -301,6 +309,19 @@ final class RunServerListenerTest extends TestCase
 
         $this->assertSame([], $listener->getDiagnosticMessages());
         $this->assertFalse($listener->isRunning());
+    }
+
+    private function waitForProcessTimeline(string $path): string
+    {
+        for ($i = 0; $i < 60; $i++) {
+            $content = is_file($path) ? trim((string)file_get_contents($path)) : '';
+            if ($content !== '') {
+                return $content;
+            }
+            usleep(50000);
+        }
+
+        $this->fail(sprintf('Expected process timeline in %s', $path));
     }
 
     private function waitForWorkerTimeline(string $path, int $minimumLines): string
