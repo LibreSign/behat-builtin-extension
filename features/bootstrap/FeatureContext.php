@@ -57,6 +57,18 @@ class FeatureContext implements Context
     }
 
     /**
+     * @Then server path :path contains :expected
+     */
+    public function serverPathContains(string $path, string $expected): void
+    {
+        $url = rtrim($this->server::getServerRoot(), '/') . '/' . ltrim($path, '/');
+        $body = file_get_contents($url);
+
+        Assert::assertIsString($body, sprintf('Expected a response body from %s', $url));
+        Assert::assertStringContainsString($expected, $body);
+    }
+
+    /**
      * @When kill server unexpectedly with :signal
      */
     public function killServerUnexpectedlyWith(string $signal): void

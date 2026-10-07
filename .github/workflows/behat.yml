@@ -30,3 +30,31 @@ jobs:
           export BEHAT_RUN_AS=$(ls -ld behat.yml | awk '{print $3}')
           export BEHAT_VERBOSE="$RUNNER_DEBUG"
           vendor/bin/behat
+
+  xdebug-persistent:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@v4
+
+      - name: Set up PHP with Xdebug and APCu
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: xdebug
+          extensions: apcu
+
+      - name: Set up dependencies
+        run: composer install
+
+      - name: Prepare PHP server probe
+        run: |
+          sudo mkdir -p /var/www/html
+          printf '%s\n' '<?php echo extension_loaded("apcu") ? "apcu=1" : "apcu=0";' | sudo tee /var/www/html/runtime-config.php >/dev/null
+
+      - name: Run Behat through persistent Xdebug handler restart
+        run: |
+          export BEHAT_RUN_AS=$(ls -ld behat.yml | awk '{print $3}')
+          export BEHAT_VERBOSE=1
+          vendor/bin/behat -p xdebug-persistent
