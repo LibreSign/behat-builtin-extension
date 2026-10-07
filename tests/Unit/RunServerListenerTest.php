@@ -335,10 +335,11 @@ final class RunServerListenerTest extends TestCase
         $command = $method->invoke($listener, 'php -v', [
             'PHPRC' => false,
             'PHP_INI_SCAN_DIR' => '/usr/local/etc/php/conf.d:/tmp/php-config',
+            'XDEBUG_MODE' => 'off',
         ]);
 
         $this->assertSame(
-            "env -u 'PHPRC' PHP_INI_SCAN_DIR='/usr/local/etc/php/conf.d:/tmp/php-config' php -v",
+            "env -u 'PHPRC' PHP_INI_SCAN_DIR='/usr/local/etc/php/conf.d:/tmp/php-config' XDEBUG_MODE='off' php -v",
             $command
         );
     }

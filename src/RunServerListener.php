@@ -150,10 +150,10 @@ final class RunServerListener implements EventSubscriberInterface
         $phpEnvironment = [];
         $restartSettings = XdebugHandler::getRestartSettings();
         if ($restartSettings !== null) {
-            $php .= ' -n -c ' . escapeshellarg($restartSettings['tmpIni']);
             $phpEnvironment = [
                 'PHPRC' => $restartSettings['phprc'],
                 'PHP_INI_SCAN_DIR' => $restartSettings['scanDir'],
+                'XDEBUG_MODE' => 'off',
             ];
         }
 
