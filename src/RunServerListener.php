@@ -7,6 +7,7 @@
 
 namespace PhpBuiltin;
 
+use Composer\XdebugHandler\XdebugHandler;
 use Behat\Behat\EventDispatcher\Event\AfterScenarioTested;
 use Behat\Behat\EventDispatcher\Event\BeforeScenarioTested;
 use Behat\Testwork\EventDispatcher\Event\AfterSuiteTested;
@@ -146,6 +147,15 @@ final class RunServerListener implements EventSubscriberInterface
 
         $script = escapeshellarg($this->rootDir);
         $php = PHP_BINARY !== '' && is_file(PHP_BINARY) ? escapeshellarg(PHP_BINARY) : 'php';
+        $phpEnvironment = [];
+        $restartSettings = XdebugHandler::getRestartSettings();
+        if ($restartSettings !== null) {
+            $php .= ' -n -c ' . escapeshellarg($restartSettings['tmpIni']);
+            $phpEnvironment = [
+                'PHPRC' => $restartSettings['phprc'],
+                'PHP_INI_SCAN_DIR' => $restartSettings['scanDir'],
+            ];
+        }
 
         $cmd = $php . ' -S ' . self::$host . ':' . self::$port . ' -t ' . $script;
         $switchUser = $this->shouldSwitchUser();
@@ -172,6 +182,10 @@ final class RunServerListener implements EventSubscriberInterface
                 $cmd = 'runuser -u ' . $this->runAs . ' -- ' . $cmd;
                 $switchUser = false;
             }
+        }
+
+        if ($phpEnvironment !== []) {
+            $cmd = $this->withEnvironment($cmd, $phpEnvironment);
         }
 
         if ($this->workers > 0) {
@@ -284,6 +298,26 @@ final class RunServerListener implements EventSubscriberInterface
                 $this->stop();
             }
         });
+    }
+
+    /**
+     * Run a child PHP process with the original environment recorded by
+     * composer/xdebug-handler, without mutating the Behat runner environment.
+     *
+     * @param array<string, string|false> $environment
+     */
+    private function withEnvironment(string $command, array $environment): string
+    {
+        $parts = ['env'];
+        foreach ($environment as $name => $value) {
+            if ($value === false) {
+                $parts[] = '-u ' . escapeshellarg($name);
+                continue;
+            }
+            $parts[] = $name . '=' . escapeshellarg($value);
+        }
+
+        return implode(' ', $parts) . ' ' . $command;
     }
 
     private function isSuperUser(): bool
@@ -1198,39 +1232,3 @@ final class RunServerListener implements EventSubscriberInterface
     private function flushWorkerMonitorOutput(): void
     {
         if (!$this->isVerbose() || !is_string($this->workerMonitorFile) || !is_file($this->workerMonitorFile)) {
-            return;
-        }
-
-        $output = @file_get_contents($this->workerMonitorFile);
-        if ($output === false || trim($output) === '') {
-            $this->writeDiagnostic('Worker timeline: (empty)');
-            return;
-        }
-
-        $this->writeDiagnostic("Worker timeline:\n" . rtrim($output));
-    }
-
-    private function flushProcessMonitorOutput(): void
-    {
-        if (!$this->isVerbose() || !is_string($this->processMonitorFile) || !is_file($this->processMonitorFile)) {
-            return;
-        }
-
-        $output = @file_get_contents($this->processMonitorFile);
-        if ($output === false || trim($output) === '') {
-            $this->writeDiagnostic('Process timeline: (empty)');
-            return;
-        }
-
-        $this->writeDiagnostic("Process timeline:\n" . rtrim($output));
-    }
-
-    private function writeDiagnostic(string $message): void
-    {
-        $this->diagnosticMessages[] = $message;
-        if (!$this->isVerbose()) {
-            return;
-        }
-        fwrite(STDERR, '[php-builtin-server] ' . $message . "\n");
-    }
-}

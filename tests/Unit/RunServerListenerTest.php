@@ -326,6 +326,23 @@ final class RunServerListenerTest extends TestCase
         $listener->stop();
     }
 
+    public function testChildPhpEnvironmentCanRestoreUnsetAndConfiguredValues(): void
+    {
+        $listener = new RunServerListener(null, $this->docRoot, '127.0.0.1', '', 0);
+        $method = new \ReflectionMethod($listener, 'withEnvironment');
+        $method->setAccessible(true);
+
+        $command = $method->invoke($listener, 'php -v', [
+            'PHPRC' => false,
+            'PHP_INI_SCAN_DIR' => '/usr/local/etc/php/conf.d:/tmp/php-config',
+        ]);
+
+        $this->assertSame(
+            "env -u 'PHPRC' PHP_INI_SCAN_DIR='/usr/local/etc/php/conf.d:/tmp/php-config' php -v",
+            $command
+        );
+    }
+
     public function testNonVerboseStopDoesNotEmitDiagnostics(): void
     {
         $listener = new RunServerListener(null, $this->docRoot, '127.0.0.1', '', 0);

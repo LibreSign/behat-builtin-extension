@@ -22,3 +22,8 @@ Feature: test server
   @diagnostic-crash
   Scenario: Scenarios after an unexpected crash are not executed
     Then diagnostic marker after crash is executed
+
+  @xdebug-persistent
+  Scenario: PHP child server keeps required extensions after Behat restarts without Xdebug
+    Given server is up
+    Then server path "/runtime-config.php" contains "apcu=1"

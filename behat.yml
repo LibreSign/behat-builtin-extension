@@ -1,10 +1,17 @@
 default:
   gherkin:
     filters:
-      tags: "~@diagnostic-crash"
+      tags: "~@diagnostic-crash&&~@xdebug-persistent"
   extensions:
     PhpBuiltin\Server: ~
 
 diagnostic:
+  extensions:
+    PhpBuiltin\Server: ~
+
+xdebug-persistent:
+  gherkin:
+    filters:
+      tags: "@xdebug-persistent"
   extensions:
     PhpBuiltin\Server: ~
