@@ -1232,3 +1232,39 @@ final class RunServerListener implements EventSubscriberInterface
     private function flushWorkerMonitorOutput(): void
     {
         if (!$this->isVerbose() || !is_string($this->workerMonitorFile) || !is_file($this->workerMonitorFile)) {
+            return;
+        }
+
+        $output = @file_get_contents($this->workerMonitorFile);
+        if ($output === false || trim($output) === '') {
+            $this->writeDiagnostic('Worker timeline: (empty)');
+            return;
+        }
+
+        $this->writeDiagnostic("Worker timeline:\n" . rtrim($output));
+    }
+
+    private function flushProcessMonitorOutput(): void
+    {
+        if (!$this->isVerbose() || !is_string($this->processMonitorFile) || !is_file($this->processMonitorFile)) {
+            return;
+        }
+
+        $output = @file_get_contents($this->processMonitorFile);
+        if ($output === false || trim($output) === '') {
+            $this->writeDiagnostic('Process timeline: (empty)');
+            return;
+        }
+
+        $this->writeDiagnostic("Process timeline:\n" . rtrim($output));
+    }
+
+    private function writeDiagnostic(string $message): void
+    {
+        $this->diagnosticMessages[] = $message;
+        if (!$this->isVerbose()) {
+            return;
+        }
+        fwrite(STDERR, '[php-builtin-server] ' . $message . "\n");
+    }
+}
