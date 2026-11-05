@@ -2,6 +2,7 @@ Feature: test server
   Scenario: Check if server is up
     Given server is up
     And the host of server is "localhost"
+    And server path "/features/fixtures/response.php" contains "behat-4-server-ok"
     Then stop server
 
   Scenario: Start server

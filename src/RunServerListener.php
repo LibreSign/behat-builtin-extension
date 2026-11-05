@@ -11,7 +11,6 @@ use Composer\XdebugHandler\XdebugHandler;
 use Behat\Behat\EventDispatcher\Event\AfterScenarioTested;
 use Behat\Behat\EventDispatcher\Event\BeforeScenarioTested;
 use Behat\Testwork\EventDispatcher\Event\AfterSuiteTested;
-use Behat\Testwork\EventDispatcher\Event\BeforeSuiteTeardown;
 use Behat\Testwork\EventDispatcher\Event\BeforeSuiteTested;
 use PhpBuiltin\Exception\ServerException;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
@@ -60,7 +59,7 @@ final class RunServerListener implements EventSubscriberInterface
             BeforeSuiteTested::BEFORE => 'beforeSuite',
             BeforeScenarioTested::BEFORE => 'beforeScenario',
             AfterScenarioTested::AFTER => 'afterScenario',
-            BeforeSuiteTeardown::AFTER => 'afterSuite'
+            AfterSuiteTested::AFTER => 'afterSuite'
         );
     }
 

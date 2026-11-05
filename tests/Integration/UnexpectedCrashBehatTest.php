@@ -11,6 +11,26 @@ use PHPUnit\Framework\TestCase;
 
 final class UnexpectedCrashBehatTest extends TestCase
 {
+    public function testInvalidServerRootProducesActionableStartupError(): void
+    {
+        $root = dirname(__DIR__, 2);
+        $missingRoot = $root . '/nonexistent-behat-test-root';
+        $command = sprintf(
+            'cd %s && BEHAT_ROOT_DIR=%s %s --dry-run --no-snippets 2>&1',
+            escapeshellarg($root),
+            escapeshellarg($missingRoot),
+            escapeshellarg($root . '/vendor/bin/behat')
+        );
+
+        $output = [];
+        exec($command, $output, $exitCode);
+        $text = implode("\n", $output);
+
+        $this->assertNotSame(0, $exitCode);
+        $this->assertStringContainsString('Invalid root dir [' . $missingRoot . ']', $text);
+        $this->assertStringContainsString('BEHAT_ROOT_DIR', $text);
+    }
+
     public function testUnexpectedCrashIsDetectedByRealBehatRun(): void
     {
         if (PHP_OS_FAMILY === 'Windows') {
@@ -19,7 +39,8 @@ final class UnexpectedCrashBehatTest extends TestCase
 
         $root = dirname(__DIR__, 2);
         $command = sprintf(
-            'cd %s && BEHAT_VERBOSE=1 %s -p diagnostic --tags=%s 2>&1',
+            'cd %s && BEHAT_ROOT_DIR=%s BEHAT_VERBOSE=1 %s -p diagnostic --tags=%s 2>&1',
+            escapeshellarg($root),
             escapeshellarg($root),
             escapeshellarg($root . '/vendor/bin/behat'),
             escapeshellarg('@diagnostic-crash')

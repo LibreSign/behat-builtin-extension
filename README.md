@@ -11,15 +11,23 @@ vendor/bin/behat --init
 
 ## Configuration
 
-Add the extension to your `behat.yml`:
+Add the extension to your `behat.php` (Behat 4 and PHP 8.2 or later):
 
-```yaml
-default:
-  extensions:
-    PhpBuiltin\Server:
-      verbose: false
-      rootDir: /var/www/html
-      host: localhost
+```php
+<?php
+
+use Behat\Config\Config;
+use Behat\Config\Extension;
+use Behat\Config\Profile;
+use PhpBuiltin\Server;
+
+return (new Config())
+    ->withProfile((new Profile('default'))
+        ->withExtension(new Extension(Server::class, [
+            'verbose' => false,
+            'rootDir' => '/var/www/html',
+            'host' => 'localhost',
+        ])));
 ```
 
 ### Config values
