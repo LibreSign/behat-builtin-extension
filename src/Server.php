@@ -12,7 +12,7 @@ use Behat\Testwork\ServiceContainer\ExtensionManager;
 use Exception;
 use Symfony\Component\Config\Definition\Builder\ArrayNodeDefinition;
 use Symfony\Component\Console\Input\ArgvInput;
-use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\Console\Output\ConsoleOutput;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\Definition;
 
@@ -84,18 +84,16 @@ final class Server implements Extension
         $host = $this->getHost($config);
         $runAs = $this->getRunAs($config);
         $workers = $this->getWorkers($config);
-        $verbose = $this->getVerboseLevel($container, $config);
+        $verbose = $this->getVerboseLevel($config);
         if (is_numeric($verbose)) {
-            $output = $container->get('cli.output');
-            if ($output instanceof OutputInterface) {
-                $output->writeln('<info>Root dir: ' . $rootDir . '</info>');
-                $output->writeln('<info>Verbose: ' . $verbose . '</info>');
-                $output->writeln('<info>Host: ' . $host . '</info>');
-                $output->writeln('<info>RunAs: ' . $runAs . '</info>');
-                $output->writeln('<info>Workers: ' . $workers . '</info>');
-            }
+            $output = new ConsoleOutput();
+            $output->writeln('<info>Root dir: ' . $rootDir . '</info>');
+            $output->writeln('<info>Verbose: ' . $verbose . '</info>');
+            $output->writeln('<info>Host: ' . $host . '</info>');
+            $output->writeln('<info>RunAs: ' . $runAs . '</info>');
+            $output->writeln('<info>Workers: ' . $workers . '</info>');
         }
-        $definition = (new Definition('PhpBuiltin\RunServerListener'))
+        $definition = (new Definition(RunServerListener::class))
             ->addTag('event_dispatcher.subscriber')
             ->setArguments([$verbose, $rootDir, $host, $runAs, $workers])
         ;
@@ -136,23 +134,20 @@ final class Server implements Extension
         if ($rootDir === false) {
             $rootDir = $config['rootDir'];
         }
-        $rootDir = (string) realpath($rootDir);
-        if (empty($rootDir) || !is_dir($rootDir)) {
-            throw new Exception('Invalid root dir [' . $rootDir . '], define BEHAT_ROOT_DIR environment or rootDir config value with valid path');
+        $configuredRootDir = (string) $rootDir;
+        $resolvedRootDir = realpath($configuredRootDir);
+        if ($resolvedRootDir === false || !is_dir($resolvedRootDir)) {
+            throw new Exception('Invalid root dir [' . $configuredRootDir . '], define BEHAT_ROOT_DIR environment or rootDir config value with valid path');
         }
-        return $rootDir;
+        return $resolvedRootDir;
     }
 
     /**
      * @psalm-suppress PossiblyNullReference
      */
-    private function getVerboseLevel(ContainerBuilder $container, array $config): ?int
+    private function getVerboseLevel(array $config): ?int
     {
-        /** @var ArgvInput */
-        $input = $container->get('cli.input');
-        if (!$input instanceof ArgvInput) {
-            return null;
-        }
+        $input = new ArgvInput($_SERVER['argv'] ?? []);
         if ($input->hasParameterOption('--verbose')) {
             $verbose = $input->getParameterOption('--verbose');
             return (int)($verbose ?? 0);

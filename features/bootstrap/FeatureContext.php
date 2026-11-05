@@ -6,6 +6,7 @@
  */
 
 use Behat\Behat\Context\Context;
+use Behat\Step\Given;
 use PhpBuiltin\RunServerListener;
 use PHPUnit\Framework\Assert;
 
@@ -18,9 +19,7 @@ class FeatureContext implements Context
         $this->server = RunServerListener::getInstance();
     }
 
-    /**
-     * @When /^server is (up|down)$/
-     */
+    #[Given('/^server is (up|down)$/')]
     public function serverIsUp(string $status)
     {
         if ($status === 'up') {
@@ -30,35 +29,27 @@ class FeatureContext implements Context
         }
     }
 
-    /**
-     * @When the host of server is :host
-     */
+    #[Given('the host of server is :host')]
     public function theHostOfServerIs($host)
     {
         Assert::assertEquals($host, $this->server->getHost());
     }
 
-    /**
-     * @When start server
-     */
+    #[Given('start server')]
     public function startServer()
     {
         $this->server->start();
         Assert::assertTrue($this->server->isRunning(), 'Server is running after start?');
     }
 
-    /**
-     * @When stop server
-     */
+    #[Given('stop server')]
     public function stopServer()
     {
         $this->server->stop();
         Assert::assertFalse($this->server->isRunning(), 'Server is stopped after stop?');
     }
 
-    /**
-     * @Then server path :path contains :expected
-     */
+    #[Given('server path :path contains :expected')]
     public function serverPathContains(string $path, string $expected): void
     {
         $url = rtrim($this->server::getServerRoot(), '/') . '/' . ltrim($path, '/');
@@ -68,9 +59,7 @@ class FeatureContext implements Context
         Assert::assertStringContainsString($expected, $body);
     }
 
-    /**
-     * @When kill server unexpectedly with :signal
-     */
+    #[Given('kill server unexpectedly with :signal')]
     public function killServerUnexpectedlyWith(string $signal): void
     {
         if (preg_match('/^[A-Z0-9]+$/', $signal) !== 1) {
@@ -102,17 +91,13 @@ class FeatureContext implements Context
         throw new \RuntimeException(sprintf('Server pid %d did not terminate', $pid));
     }
 
-    /**
-     * @Then diagnostic marker after crash is executed
-     */
+    #[Given('diagnostic marker after crash is executed')]
     public function diagnosticMarkerAfterCrashIsExecuted(): void
     {
         throw new \RuntimeException('SCENARIO_AFTER_CRASH_EXECUTED');
     }
 
-    /**
-     * @When kill all instances
-     */
+    #[Given('kill all instances')]
     public function killAllInstances()
     {
         $this->server->stop();

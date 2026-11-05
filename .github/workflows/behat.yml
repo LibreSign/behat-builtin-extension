@@ -27,8 +27,9 @@ jobs:
 
       - name: Run behat
         run: |
-          export BEHAT_RUN_AS=$(ls -ld behat.yml | awk '{print $3}')
+          export BEHAT_RUN_AS=$(ls -ld behat.php | awk '{print $3}')
           export BEHAT_VERBOSE="$RUNNER_DEBUG"
+          export BEHAT_ROOT_DIR="$PWD"
           vendor/bin/behat
 
   xdebug-persistent:
@@ -55,6 +56,6 @@ jobs:
 
       - name: Run Behat through persistent Xdebug handler restart
         run: |
-          export BEHAT_RUN_AS=$(ls -ld behat.yml | awk '{print $3}')
+          export BEHAT_RUN_AS=$(ls -ld behat.php | awk '{print $3}')
           export BEHAT_VERBOSE=1
           vendor/bin/behat -p xdebug-persistent
