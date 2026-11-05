@@ -293,9 +293,10 @@ final class RunServerListenerTest extends TestCase
         $this->assertStringContainsString('Worker timeline:', $messages);
         $this->assertStringContainsString(sprintf('%d:Z', $killedWorker), $messages);
         if (PHP_OS_FAMILY === 'Linux') {
-            $this->assertStringContainsString(
-                sprintf('Core dump unavailable pid=%d', $killedWorker),
-                $messages
+            $this->assertTrue(
+                str_contains($messages, sprintf('Core dump unavailable pid=%d', $killedWorker))
+                || str_contains($messages, 'Core dump analysis unavailable: coredumpctl not found.'),
+                'Missing core dump tooling should be reported without losing worker diagnostics.'
             );
             $this->assertStringContainsString(
                 sprintf('Worker termination pid=%d wait_status=9 signal=9 (SIGKILL) core_dumped=no', $killedWorker),
@@ -438,9 +439,9 @@ final class RunServerListenerTest extends TestCase
         if ($pid <= 0) {
             return false;
         }
-        exec(sprintf('ps %d', $pid), $result);
+        exec(sprintf('ps -o stat= -p %d', $pid), $result, $exitCode);
 
-        return count($result) > 1;
+        return $exitCode === 0 && isset($result[0]) && !str_starts_with(trim($result[0]), 'Z');
     }
 
     private function canBindPort(string $host, int $port): bool
